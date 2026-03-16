@@ -1,0 +1,787 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Platform,
+  ScrollView,
+  ActivityIndicator,
+} from "react-native";
+import { StatusBar } from "expo-status-bar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Location from "expo-location";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Crosshair,
+  Shield,
+  Zap,
+  MapPin,
+  Navigation,
+  Hexagon,
+} from "lucide-react-native";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import {
+  COLORS,
+  latLngToGrid,
+  gridToLatLng,
+  getOwnerColor,
+} from "@/constants/theme";
+import useUser from "@/utils/auth/useUser";
+
+const isWeb = Platform.OS === "web";
+const isIOS = Platform.OS === "ios";
+
+const darkGoogleMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#08080A" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#08080A" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#3a3a4a" }] },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#111114" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#0a0a0d" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry",
+    stylers: [{ color: "#040408" }],
+  },
+  {
+    featureType: "poi",
+    elementType: "geometry",
+    stylers: [{ color: "#0a0a0d" }],
+  },
+  {
+    featureType: "poi.park",
+    elementType: "geometry",
+    stylers: [{ color: "#0a0a0d" }],
+  },
+  {
+    featureType: "transit",
+    elementType: "geometry",
+    stylers: [{ color: "#0a0a0d" }],
+  },
+  {
+    featureType: "administrative",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#1a1a24" }],
+  },
+];
+
+function NativeMapContent({
+  mapRef,
+  region,
+  onRegionChangeComplete,
+  territories,
+  user,
+  onMapReady,
+}) {
+  const MapView = require("react-native-maps").default;
+  const { PROVIDER_GOOGLE, Polygon } = require("react-native-maps");
+
+  const provider = isIOS ? undefined : PROVIDER_GOOGLE;
+  const customMapStyle = isIOS ? undefined : darkGoogleMapStyle;
+  const mapType = isIOS ? "mutedStandard" : "standard";
+
+  return (
+    <MapView
+      ref={mapRef}
+      provider={provider}
+      mapType={mapType}
+      style={{ flex: 1 }}
+      initialRegion={region}
+      onRegionChangeComplete={onRegionChangeComplete}
+      customMapStyle={customMapStyle}
+      showsUserLocation={true}
+      showsMyLocationButton={false}
+      showsCompass={false}
+      showsBuildings={true}
+      showsTraffic={false}
+      onMapReady={onMapReady}
+    >
+      {territories.map((territory) => {
+        const bounds = gridToLatLng(
+          territory.grid_lat,
+          territory.grid_lng,
+          region.latitude,
+        );
+        const color = getOwnerColor(territory.owner_id);
+        const opacity = Math.min(0.18 + (territory.strength || 1) * 0.05, 0.55);
+        const isOwn = territory.owner_id === user?.id;
+        const strokeColor = isOwn ? COLORS.accent : color;
+        const alpha = Math.round(opacity * 255)
+          .toString(16)
+          .padStart(2, "0");
+
+        return (
+          <Polygon
+            key={`${territory.grid_lat}-${territory.grid_lng}`}
+            coordinates={[
+              { latitude: bounds.lat, longitude: bounds.lng },
+              { latitude: bounds.latEnd, longitude: bounds.lng },
+              { latitude: bounds.latEnd, longitude: bounds.lngEnd },
+              { latitude: bounds.lat, longitude: bounds.lngEnd },
+            ]}
+            fillColor={`${color}${alpha}`}
+            strokeColor={`${strokeColor}AA`}
+            strokeWidth={1}
+          />
+        );
+      })}
+    </MapView>
+  );
+}
+
+function WebMapFallback({ territories, user, location, title, subtitle }) {
+  const myTerritories = territories.filter((t) => t.owner_id === user?.id);
+  const otherTerritories = territories.filter((t) => t.owner_id !== user?.id);
+
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        paddingBottom: 120,
+      }}
+      showsVerticalScrollIndicator={false}
+    >
+      <Animated.View
+        entering={FadeInDown.duration(500)}
+        style={{
+          backgroundColor: COLORS.surface,
+          borderRadius: 24,
+          padding: 28,
+          borderWidth: 1,
+          borderColor: COLORS.borderAccent,
+          alignItems: "center",
+          marginBottom: 24,
+        }}
+      >
+        <View
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: 36,
+            backgroundColor: COLORS.accentMuted,
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: COLORS.accentGlow,
+          }}
+        >
+          <Navigation size={30} color={COLORS.accent} />
+        </View>
+        <Text
+          style={{
+            color: COLORS.textPrimary,
+            fontSize: 20,
+            fontWeight: "700",
+            letterSpacing: -0.3,
+          }}
+        >
+          {title}
+        </Text>
+        <Text
+          style={{
+            color: COLORS.textTertiary,
+            fontSize: 13,
+            marginTop: 8,
+            textAlign: "center",
+            lineHeight: 20,
+          }}
+        >
+          {subtitle}
+        </Text>
+        {location && (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginTop: 14,
+              backgroundColor: COLORS.card,
+              paddingHorizontal: 14,
+              paddingVertical: 7,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+            }}
+          >
+            <MapPin size={12} color={COLORS.accent} />
+            <Text
+              style={{
+                color: COLORS.textSecondary,
+                fontSize: 11,
+                marginLeft: 6,
+                fontWeight: "500",
+              }}
+            >
+              {location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}
+            </Text>
+          </View>
+        )}
+      </Animated.View>
+
+      <Text
+        style={{
+          color: COLORS.accent,
+          fontSize: 12,
+          fontWeight: "700",
+          letterSpacing: 1.5,
+          marginBottom: 12,
+          textTransform: "uppercase",
+        }}
+      >
+        Your Zones · {myTerritories.length}
+      </Text>
+      {myTerritories.length === 0 && (
+        <Animated.View
+          entering={FadeInDown.delay(100).duration(300)}
+          style={{
+            backgroundColor: COLORS.surface,
+            borderRadius: 20,
+            padding: 24,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            marginBottom: 20,
+          }}
+        >
+          <Hexagon size={36} color={COLORS.textDisabled} />
+          <Text
+            style={{
+              color: COLORS.textSecondary,
+              fontSize: 14,
+              fontWeight: "600",
+              marginTop: 10,
+            }}
+          >
+            No territories claimed
+          </Text>
+          <Text
+            style={{ color: COLORS.textTertiary, fontSize: 12, marginTop: 4 }}
+          >
+            Start running to conquer your first zone
+          </Text>
+        </Animated.View>
+      )}
+      {myTerritories.map((territory, idx) => (
+        <Animated.View
+          key={`${territory.grid_lat}-${territory.grid_lng}`}
+          entering={FadeInDown.delay(idx * 40).duration(300)}
+          style={{
+            backgroundColor: COLORS.accentMuted,
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 8,
+            borderWidth: 1,
+            borderColor: COLORS.borderAccent,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <View
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 12,
+                backgroundColor: COLORS.accentGlow,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Shield size={18} color={COLORS.accent} />
+            </View>
+            <View style={{ marginLeft: 12 }}>
+              <Text
+                style={{
+                  color: COLORS.textPrimary,
+                  fontSize: 14,
+                  fontWeight: "600",
+                }}
+              >
+                Zone ({territory.grid_lat}, {territory.grid_lng})
+              </Text>
+              <Text
+                style={{
+                  color: COLORS.textTertiary,
+                  fontSize: 11,
+                  marginTop: 2,
+                }}
+              >
+                Controlled by you
+              </Text>
+            </View>
+          </View>
+          <View style={{ alignItems: "flex-end" }}>
+            <View style={{ flexDirection: "row", gap: 3 }}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <View
+                  key={i}
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 3,
+                    backgroundColor:
+                      i < (territory.strength || 0)
+                        ? COLORS.accent
+                        : COLORS.textDisabled,
+                  }}
+                />
+              ))}
+            </View>
+            <Text
+              style={{
+                color: COLORS.textTertiary,
+                fontSize: 10,
+                marginTop: 4,
+                fontWeight: "600",
+              }}
+            >
+              LVL {territory.strength || 0}
+            </Text>
+          </View>
+        </Animated.View>
+      ))}
+
+      {otherTerritories.length > 0 && (
+        <View style={{ marginTop: 20 }}>
+          <Text
+            style={{
+              color: COLORS.orange,
+              fontSize: 12,
+              fontWeight: "700",
+              letterSpacing: 1.5,
+              marginBottom: 12,
+              textTransform: "uppercase",
+            }}
+          >
+            Rival Zones · {otherTerritories.length}
+          </Text>
+          {otherTerritories.map((territory, idx) => {
+            const ownerColor = getOwnerColor(territory.owner_id);
+            return (
+              <Animated.View
+                key={`${territory.grid_lat}-${territory.grid_lng}`}
+                entering={FadeInDown.delay(
+                  (myTerritories.length + idx) * 40,
+                ).duration(300)}
+                style={{
+                  backgroundColor: COLORS.surface,
+                  borderRadius: 16,
+                  padding: 16,
+                  marginBottom: 8,
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <View
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 12,
+                      backgroundColor: `${ownerColor}15`,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Shield size={18} color={ownerColor} />
+                  </View>
+                  <View style={{ marginLeft: 12 }}>
+                    <Text
+                      style={{
+                        color: COLORS.textPrimary,
+                        fontSize: 14,
+                        fontWeight: "600",
+                      }}
+                    >
+                      {territory.owner_username || "Unknown"}
+                    </Text>
+                    <Text
+                      style={{
+                        color: COLORS.textTertiary,
+                        fontSize: 11,
+                        marginTop: 2,
+                      }}
+                    >
+                      Zone ({territory.grid_lat}, {territory.grid_lng})
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <View style={{ flexDirection: "row", gap: 3 }}>
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <View
+                        key={i}
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 3,
+                          backgroundColor:
+                            i < (territory.strength || 0)
+                              ? ownerColor
+                              : COLORS.textDisabled,
+                        }}
+                      />
+                    ))}
+                  </View>
+                  <Text
+                    style={{
+                      color: COLORS.textTertiary,
+                      fontSize: 10,
+                      marginTop: 4,
+                      fontWeight: "600",
+                    }}
+                  >
+                    LVL {territory.strength || 0}
+                  </Text>
+                </View>
+              </Animated.View>
+            );
+          })}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+export default function MapScreen() {
+  const insets = useSafeAreaInsets();
+  const { data: user } = useUser();
+  const mapRef = useRef(null);
+  const [location, setLocation] = useState(null);
+  const [locationPermission, setLocationPermission] = useState("loading");
+  const [locationError, setLocationError] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [region, setRegion] = useState({
+    latitude: 12.9716,
+    longitude: 77.5946,
+    latitudeDelta: 0.02,
+    longitudeDelta: 0.02,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const initLocation = async () => {
+      try {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled) {
+          if (!isMounted) return;
+          setLocationPermission("denied");
+          setLocationError(
+            "Turn on location services to center the map on you.",
+          );
+          return;
+        }
+
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (!isMounted) return;
+
+        setLocationPermission(status);
+
+        if (status !== "granted") {
+          setLocationError(
+            "Location access is off. The map is still visible, but it won't center on your live position.",
+          );
+          return;
+        }
+
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        if (!isMounted) return;
+
+        setLocation(loc.coords);
+        setRegion({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
+      } catch (err) {
+        console.error("Location error:", err);
+        if (!isMounted) return;
+        setLocationPermission("error");
+        setLocationError("Could not get your current location.");
+      }
+    };
+
+    initLocation();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const minGrid = latLngToGrid(
+    region.latitude - region.latitudeDelta,
+    region.longitude - region.longitudeDelta,
+  );
+  const maxGrid = latLngToGrid(
+    region.latitude + region.latitudeDelta,
+    region.longitude + region.longitudeDelta,
+  );
+
+  const { data: territoriesData } = useQuery({
+    queryKey: [
+      "territories",
+      minGrid.gridLat,
+      maxGrid.gridLat,
+      minGrid.gridLng,
+      maxGrid.gridLng,
+    ],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/territories?minLat=${minGrid.gridLat}&maxLat=${maxGrid.gridLat}&minLng=${minGrid.gridLng}&maxLng=${maxGrid.gridLng}`,
+      );
+      if (!res.ok) {
+        throw new Error("Failed to fetch territories");
+      }
+      return res.json();
+    },
+    refetchInterval: 10000,
+  });
+
+  const territories = territoriesData?.territories || [];
+  const myTerritories = useMemo(
+    () => territories.filter((t) => t.owner_id === user?.id),
+    [territories, user?.id],
+  );
+  const totalStrength = useMemo(
+    () => myTerritories.reduce((sum, t) => sum + (t.strength || 0), 0),
+    [myTerritories],
+  );
+
+  const centerOnUser = useCallback(() => {
+    if (!location || !mapRef.current) return;
+    mapRef.current.animateToRegion(
+      {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      },
+      500,
+    );
+  }, [location]);
+
+  const handleRegionChangeComplete = useCallback((nextRegion) => {
+    setRegion(nextRegion);
+  }, []);
+
+  const header = (
+    <View
+      style={{
+        paddingTop: insets.top + 8,
+        paddingHorizontal: 20,
+        paddingBottom: 14,
+        backgroundColor: isWeb ? COLORS.black : "rgba(0,0,0,0.88)",
+        ...(isWeb
+          ? {}
+          : { position: "absolute", top: 0, left: 0, right: 0, zIndex: 10 }),
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 24,
+            fontWeight: "800",
+            color: COLORS.white,
+            letterSpacing: -0.5,
+          }}
+        >
+          druta<Text style={{ color: COLORS.accent }}>.</Text>
+        </Text>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              backgroundColor: COLORS.accentMuted,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: COLORS.borderAccent,
+            }}
+          >
+            <Shield size={13} color={COLORS.accent} />
+            <Text
+              style={{
+                color: COLORS.white,
+                fontSize: 13,
+                fontWeight: "700",
+                marginLeft: 5,
+              }}
+            >
+              {myTerritories.length}
+            </Text>
+          </View>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              backgroundColor: COLORS.surface,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+            }}
+          >
+            <Zap size={13} color={COLORS.orange} />
+            <Text
+              style={{
+                color: COLORS.white,
+                fontSize: 13,
+                fontWeight: "700",
+                marginLeft: 5,
+              }}
+            >
+              {totalStrength}
+            </Text>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
+      <StatusBar style="light" />
+
+      {!isWeb && (
+        <>
+          {!mapReady && (
+            <View
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 2,
+                backgroundColor: COLORS.black,
+              }}
+            >
+              <ActivityIndicator color={COLORS.accent} size="large" />
+              <Text
+                style={{
+                  color: COLORS.textSecondary,
+                  fontSize: 13,
+                  marginTop: 12,
+                }}
+              >
+                Loading map...
+              </Text>
+            </View>
+          )}
+
+          <NativeMapContent
+            mapRef={mapRef}
+            region={region}
+            onRegionChangeComplete={handleRegionChangeComplete}
+            territories={territories}
+            user={user}
+            onMapReady={() => setMapReady(true)}
+          />
+
+          {header}
+
+          {!location && locationError ? (
+            <View
+              style={{
+                position: "absolute",
+                left: 16,
+                right: 16,
+                bottom: 100,
+                backgroundColor: COLORS.surface,
+                borderRadius: 18,
+                padding: 14,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+              }}
+            >
+              <Text
+                style={{
+                  color: COLORS.white,
+                  fontSize: 14,
+                  fontWeight: "600",
+                }}
+              >
+                Map is visible
+              </Text>
+              <Text
+                style={{
+                  color: COLORS.textTertiary,
+                  fontSize: 12,
+                  lineHeight: 18,
+                  marginTop: 4,
+                }}
+              >
+                {locationError}
+              </Text>
+            </View>
+          ) : null}
+
+          <TouchableOpacity
+            onPress={centerOnUser}
+            disabled={!location}
+            style={{
+              position: "absolute",
+              right: 16,
+              bottom: 100,
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              backgroundColor: COLORS.surface,
+              borderWidth: 1,
+              borderColor: COLORS.borderLight,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: location ? 1 : 0.5,
+            }}
+          >
+            <Crosshair size={22} color={COLORS.accent} />
+          </TouchableOpacity>
+        </>
+      )}
+
+      {isWeb && (
+        <>
+          {header}
+          <WebMapFallback
+            territories={territories}
+            user={user}
+            location={location}
+            title="Territory Map"
+            subtitle={
+              "Full interactive map loads on your device.\nHere's your territory overview."
+            }
+          />
+        </>
+      )}
+    </View>
+  );
+}
