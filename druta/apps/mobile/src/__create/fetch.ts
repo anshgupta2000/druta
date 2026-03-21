@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { fetch as expoFetch } from 'expo/fetch';
+import { handleLocalApiRequest, shouldUseLocalApiFallback } from './local-api';
 
 const originalFetch = fetch;
 const authKey = `${process.env.EXPO_PUBLIC_PROJECT_GROUP_ID}-jwt`;
@@ -86,6 +87,13 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
 
   if (auth) {
     finalHeaders.set('authorization', `Bearer ${auth.jwt}`);
+  }
+
+  if (shouldUseLocalApiFallback()) {
+    const localResponse = await handleLocalApiRequest({ url, init, auth });
+    if (localResponse) {
+      return localResponse;
+    }
   }
 
   return expoFetch(finalInput, {

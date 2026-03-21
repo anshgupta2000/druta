@@ -1,4 +1,5 @@
 import { useAuth } from '@/utils/auth/useAuth';
+import { AuthModal } from '@/utils/auth/useAuthModal';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -40,6 +41,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }} initialRouteName="index">
           <Stack.Screen name="index" />
         </Stack>
+        <AuthModal />
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

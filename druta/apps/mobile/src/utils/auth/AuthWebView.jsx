@@ -34,9 +34,18 @@ export const AuthWebView = ({ mode, proxyURL, baseURL }) => {
     if (typeof window === 'undefined' || !window.addEventListener) {
       return;
     }
+    const allowedOrigins = [proxyURL, baseURL]
+      .filter(Boolean)
+      .map((url) => {
+        try {
+          return new URL(url).origin;
+        } catch {
+          return url;
+        }
+      });
     const handleMessage = (event) => {
       // Verify the origin for security
-      if (event.origin !== process.env.EXPO_PUBLIC_PROXY_BASE_URL) {
+      if (!allowedOrigins.includes(event.origin)) {
         return;
       }
       if (event.data.type === 'AUTH_SUCCESS') {
@@ -54,7 +63,7 @@ export const AuthWebView = ({ mode, proxyURL, baseURL }) => {
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [setAuth]);
+  }, [baseURL, proxyURL, setAuth]);
 
   if (Platform.OS === 'web') {
     const handleIframeError = () => {
@@ -71,17 +80,29 @@ export const AuthWebView = ({ mode, proxyURL, baseURL }) => {
       />
     );
   }
+
+  const shouldInjectCreateHeaders = Boolean(
+    process.env.EXPO_PUBLIC_HOST &&
+      process.env.EXPO_PUBLIC_BASE_URL &&
+      baseURL &&
+      baseURL.includes(process.env.EXPO_PUBLIC_HOST)
+  );
+
+  const requestHeaders = shouldInjectCreateHeaders
+    ? {
+        'x-createxyz-project-group-id': process.env.EXPO_PUBLIC_PROJECT_GROUP_ID,
+        host: process.env.EXPO_PUBLIC_HOST,
+        'x-forwarded-host': process.env.EXPO_PUBLIC_HOST,
+        'x-createxyz-host': process.env.EXPO_PUBLIC_HOST,
+      }
+    : undefined;
+
   return (
     <WebView
       sharedCookiesEnabled
       source={{
         uri: currentURI,
-      }}
-      headers={{
-        'x-createxyz-project-group-id': process.env.EXPO_PUBLIC_PROJECT_GROUP_ID,
-        host: process.env.EXPO_PUBLIC_HOST,
-        'x-forwarded-host': process.env.EXPO_PUBLIC_HOST,
-        'x-createxyz-host': process.env.EXPO_PUBLIC_HOST,
+        ...(requestHeaders ? { headers: requestHeaders } : {}),
       }}
       onShouldStartLoadWithRequest={(request) => {
         if (request.url === `${baseURL}${callbackUrl}`) {
