@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { View, Text, TouchableOpacity, Alert } from "react-native";
+import { View, Text, TouchableOpacity, Alert, Platform } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Location from "expo-location";
@@ -25,10 +25,15 @@ import Animated, {
 import { COLORS, calculateDistance, formatDuration } from "@/constants/theme";
 import { useAuth } from "@/utils/auth/useAuth";
 
-const MIN_ACCEPTED_SEGMENT_METERS = 2.5;
-const MAX_ACCEPTED_SEGMENT_METERS = 120;
+const DISTANCE_COMMIT_THRESHOLD_METERS = 1.5;
+const NOISE_GATE_MIN_METERS = 1.2;
+const NOISE_GATE_MAX_METERS = 8;
+const NOISE_GATE_ACCURACY_FACTOR = 0.12;
+const DISTANCE_DEDUCTION_RATIO = 0.35;
 const MAX_ACCEPTED_SPEED_MPS = 10;
 const MAX_ACCEPTABLE_ACCURACY_METERS = 65;
+const HARD_REJECT_ACCURACY_METERS = 120;
+const HARD_REJECT_JUMP_METERS = 400;
 const FALLBACK_POLL_INTERVAL_MS = 3000;
 
 export default function RunScreen() {
@@ -49,7 +54,9 @@ export default function RunScreen() {
   const locationSub = useRef(null);
   const timerRef = useRef(null);
   const pollRef = useRef(null);
-  const lastAcceptedPosition = useRef(null);
+  const lastProcessedPosition = useRef(null);
+  const pendingDistanceMeters = useRef(0);
+  const totalDistanceMeters = useRef(0);
 
   const pulseScale = useSharedValue(1);
   const buttonScale = useSharedValue(1);
@@ -145,14 +152,27 @@ export default function RunScreen() {
 
     const latitude = coords.latitude;
     const longitude = coords.longitude;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return;
+    }
+
     const accuracy =
-      typeof coords.accuracy === "number" ? coords.accuracy : null;
-    const timestamp = loc.timestamp || Date.now();
+      typeof coords.accuracy === "number" && Number.isFinite(coords.accuracy)
+        ? Math.max(coords.accuracy, 0)
+        : null;
+    const timestamp =
+      typeof loc.timestamp === "number" && Number.isFinite(loc.timestamp)
+        ? loc.timestamp
+        : Date.now();
+    const speed =
+      typeof coords.speed === "number" && Number.isFinite(coords.speed) && coords.speed > 0
+        ? coords.speed
+        : null;
 
     setCurrentCoords({ latitude, longitude });
     setCurrentAccuracy(accuracy);
 
-    if (accuracy !== null && accuracy > MAX_ACCEPTABLE_ACCURACY_METERS) {
+    if (accuracy !== null && accuracy > HARD_REJECT_ACCURACY_METERS) {
       setGpsStatus("waiting");
       return;
     }
@@ -162,20 +182,21 @@ export default function RunScreen() {
       longitude,
       timestamp,
       accuracy,
-      speed:
-        typeof coords.speed === "number" && coords.speed > 0
-          ? coords.speed
-          : null,
+      speed,
     };
 
-    if (!lastAcceptedPosition.current) {
-      lastAcceptedPosition.current = sample;
+    if (!lastProcessedPosition.current) {
+      if (accuracy !== null && accuracy > MAX_ACCEPTABLE_ACCURACY_METERS) {
+        setGpsStatus("waiting");
+        return;
+      }
+      lastProcessedPosition.current = sample;
       setPositions([sample]);
       setGpsStatus("ready");
       return;
     }
 
-    const previous = lastAcceptedPosition.current;
+    const previous = lastProcessedPosition.current;
     const segmentDistanceKm = calculateDistance(
       previous.latitude,
       previous.longitude,
@@ -183,27 +204,65 @@ export default function RunScreen() {
       sample.longitude,
     );
     const segmentDistanceMeters = segmentDistanceKm * 1000;
-    const elapsedSeconds = Math.max((timestamp - previous.timestamp) / 1000, 1);
+    const elapsedSeconds = Math.max((timestamp - previous.timestamp) / 1000, 0.5);
     const derivedSpeedMps = segmentDistanceMeters / elapsedSeconds;
-    const speedMps = sample.speed || derivedSpeedMps;
+    const speedMps = sample.speed ?? derivedSpeedMps;
 
-    if (segmentDistanceMeters < MIN_ACCEPTED_SEGMENT_METERS) {
-      setGpsStatus("tracking");
-      return;
-    }
-
+    const dynamicMaxSegmentMeters = Math.max(
+      HARD_REJECT_JUMP_METERS,
+      MAX_ACCEPTED_SPEED_MPS * elapsedSeconds * 2.5 + 25,
+    );
     if (
-      segmentDistanceMeters > MAX_ACCEPTED_SEGMENT_METERS ||
-      speedMps > MAX_ACCEPTED_SPEED_MPS
+      speedMps > MAX_ACCEPTED_SPEED_MPS * 1.8 ||
+      segmentDistanceMeters > dynamicMaxSegmentMeters
     ) {
+      if (accuracy === null || accuracy <= MAX_ACCEPTABLE_ACCURACY_METERS) {
+        lastProcessedPosition.current = sample;
+      }
+      pendingDistanceMeters.current = 0;
       setGpsStatus("waiting");
       return;
     }
 
-    setDistance((prev) => prev + segmentDistanceKm);
-    setLastAcceptedSpeedMps(speedMps);
+    if (accuracy !== null && accuracy > MAX_ACCEPTABLE_ACCURACY_METERS) {
+      setGpsStatus("waiting");
+      return;
+    }
+
+    const previousAccuracy =
+      previous.accuracy ?? MAX_ACCEPTABLE_ACCURACY_METERS / 2;
+    const currentAccuracy = accuracy ?? MAX_ACCEPTABLE_ACCURACY_METERS / 2;
+    const noiseGateMeters = Math.max(
+      NOISE_GATE_MIN_METERS,
+      Math.min(
+        NOISE_GATE_MAX_METERS,
+        (previousAccuracy + currentAccuracy) * NOISE_GATE_ACCURACY_FACTOR,
+      ),
+    );
+
+    if (segmentDistanceMeters < noiseGateMeters) {
+      setGpsStatus("tracking");
+      return;
+    }
+
+    const creditedDistanceMeters = Math.max(
+      0,
+      segmentDistanceMeters - noiseGateMeters * DISTANCE_DEDUCTION_RATIO,
+    );
+    pendingDistanceMeters.current += creditedDistanceMeters;
+    lastProcessedPosition.current = sample;
+
+    if (pendingDistanceMeters.current < DISTANCE_COMMIT_THRESHOLD_METERS) {
+      setGpsStatus("tracking");
+      return;
+    }
+
+    totalDistanceMeters.current += pendingDistanceMeters.current;
+    pendingDistanceMeters.current = 0;
+
+    setDistance(totalDistanceMeters.current / 1000);
+    setLastAcceptedSpeedMps(Math.min(speedMps, MAX_ACCEPTED_SPEED_MPS));
     setPositions((prev) => [...prev, sample]);
-    lastAcceptedPosition.current = sample;
     setGpsStatus("tracking");
   }, []);
 
@@ -248,11 +307,16 @@ export default function RunScreen() {
     setCurrentAccuracy(null);
     setLastAcceptedSpeedMps(0);
     setCurrentCoords(null);
-    lastAcceptedPosition.current = null;
+    lastProcessedPosition.current = null;
+    pendingDistanceMeters.current = 0;
+    totalDistanceMeters.current = 0;
 
     try {
       const initial = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
+        accuracy: Location.Accuracy.BestForNavigation,
+        mayShowUserSettingsDialog: true,
+        maximumAge: 1000,
+        timeout: 15000,
       });
       acceptLocationSample(initial);
     } catch (err) {
@@ -260,12 +324,18 @@ export default function RunScreen() {
     }
 
     try {
+      const trackingOptions = {
+        accuracy: Location.Accuracy.BestForNavigation,
+        timeInterval: 1000,
+        distanceInterval: 1,
+      };
+      if (Platform.OS === "ios") {
+        trackingOptions.activityType = Location.ActivityType.Fitness;
+        trackingOptions.pausesUpdatesAutomatically = false;
+      }
+
       locationSub.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 1000,
-          distanceInterval: 1,
-        },
+        trackingOptions,
         acceptLocationSample,
       );
     } catch (err) {
@@ -275,7 +345,10 @@ export default function RunScreen() {
     pollRef.current = setInterval(async () => {
       try {
         const snapshot = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
+          accuracy: Location.Accuracy.Balanced,
+          mayShowUserSettingsDialog: false,
+          maximumAge: 1000,
+          timeout: 5000,
         });
         acceptLocationSample(snapshot);
       } catch (err) {
@@ -290,7 +363,19 @@ export default function RunScreen() {
     setGpsStatus("idle");
     stopTracking();
 
-    if (distance > 0.01) {
+    if (pendingDistanceMeters.current > 0) {
+      totalDistanceMeters.current += pendingDistanceMeters.current;
+      pendingDistanceMeters.current = 0;
+      setDistance(totalDistanceMeters.current / 1000);
+    }
+
+    const finalDistanceKm = totalDistanceMeters.current / 1000;
+    const finalAverageSpeedMps =
+      duration > 0 && finalDistanceKm > 0
+        ? (finalDistanceKm * 1000) / duration
+        : 0;
+
+    if (finalDistanceKm > 0.01) {
       try {
         const routeData =
           positions.length > 0 ? JSON.stringify(positions) : null;
@@ -298,9 +383,9 @@ export default function RunScreen() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            distance_km: Math.round(distance * 1000) / 1000,
+            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
             duration_seconds: duration,
-            avg_pace: averageSpeedMps > 0 ? averageSpeedMps * 3.6 : null,
+            avg_pace: finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
             territories_claimed: 0,
             route_data: routeData,
             started_at: startTime,
@@ -313,8 +398,6 @@ export default function RunScreen() {
       }
     }
   }, [
-    averageSpeedMps,
-    distance,
     duration,
     positions,
     queryClient,
