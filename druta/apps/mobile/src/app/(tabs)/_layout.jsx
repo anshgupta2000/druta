@@ -1,6 +1,6 @@
 import { Tabs } from "expo-router";
 import { View } from "react-native";
-import { Map, Play, Swords, User, Trophy } from "lucide-react-native";
+import { Navigation, Swords, User, Trophy } from "lucide-react-native";
 import { COLORS } from "@/constants/theme";
 
 export default function TabLayout() {
@@ -28,7 +28,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Map",
+          title: "Track",
           tabBarIcon: ({ color, focused }) => (
             <View
               style={{
@@ -44,7 +44,11 @@ export default function TabLayout() {
                   : {}),
               }}
             >
-              <Map color={color} size={22} strokeWidth={focused ? 2.5 : 1.8} />
+              <Navigation
+                color={color}
+                size={22}
+                strokeWidth={focused ? 2.5 : 1.8}
+              />
             </View>
           ),
         }}
@@ -52,25 +56,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="run"
         options={{
-          title: "Run",
-          tabBarIcon: ({ color, focused }) => (
-            <View
-              style={{
-                alignItems: "center",
-                justifyContent: "center",
-                ...(focused
-                  ? {
-                      shadowColor: COLORS.accent,
-                      shadowOffset: { width: 0, height: 0 },
-                      shadowOpacity: 0.6,
-                      shadowRadius: 8,
-                    }
-                  : {}),
-              }}
-            >
-              <Play color={color} size={22} strokeWidth={focused ? 2.5 : 1.8} />
-            </View>
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen

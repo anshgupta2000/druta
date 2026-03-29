@@ -18,6 +18,8 @@ import {
   MapPin,
   Navigation,
   Hexagon,
+  Play,
+  Square,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
@@ -25,8 +27,10 @@ import {
   latLngToGrid,
   gridToLatLng,
   getOwnerColor,
+  formatDuration,
 } from "@/constants/theme";
 import useUser from "@/utils/auth/useUser";
+import { useRunTracker } from "@/utils/run/useRunTracker";
 
 const isWeb = Platform.OS === "web";
 const isIOS = Platform.OS === "ios";
@@ -146,7 +150,7 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
       contentContainerStyle={{
         paddingHorizontal: 20,
         paddingTop: 16,
-        paddingBottom: 120,
+        paddingBottom: 380,
       }}
       showsVerticalScrollIndicator={false}
     >
@@ -456,9 +460,217 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
   );
 }
 
+function MetricCell({ label, value, valueColor = COLORS.white, unit }) {
+  return (
+    <View style={{ flex: 1, alignItems: "center" }}>
+      <Text
+        style={{
+          color: valueColor,
+          fontSize: 34,
+          fontWeight: "800",
+          letterSpacing: -1.2,
+        }}
+      >
+        {value}
+      </Text>
+      <Text
+        style={{
+          color: COLORS.textTertiary,
+          fontSize: 12,
+          fontWeight: "700",
+          letterSpacing: 0.6,
+          marginTop: 2,
+        }}
+      >
+        {label}
+      </Text>
+      {unit ? (
+        <Text
+          style={{
+            color: COLORS.textDisabled,
+            fontSize: 11,
+            marginTop: 2,
+            fontWeight: "600",
+            letterSpacing: 0.4,
+          }}
+        >
+          {unit}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function TrackingDock({
+  isRunning,
+  duration,
+  paceDisplay,
+  distance,
+  speedKmh,
+  currentAccuracy,
+  gpsLabel,
+  onStartRun,
+  onStopRun,
+  bottomInset,
+}) {
+  const accuracyLabel =
+    currentAccuracy !== null ? `${Math.round(currentAccuracy)}m` : "--";
+
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: 14,
+        right: 14,
+        bottom: bottomInset + 66,
+        zIndex: 20,
+      }}
+      pointerEvents="box-none"
+    >
+      <Animated.View
+        entering={FadeInDown.duration(350)}
+        style={{
+          backgroundColor: "rgba(5,5,8,0.92)",
+          borderRadius: 26,
+          paddingTop: 14,
+          paddingBottom: 18,
+          paddingHorizontal: 14,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.08)",
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.32,
+          shadowRadius: 24,
+        }}
+      >
+        <View
+          style={{
+            alignSelf: "center",
+            backgroundColor: isRunning ? "rgba(45,122,255,0.18)" : COLORS.surface,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: isRunning ? COLORS.borderAccent : COLORS.border,
+            paddingHorizontal: 14,
+            paddingVertical: 6,
+            marginBottom: 14,
+          }}
+        >
+          <Text
+            style={{
+              color: isRunning ? COLORS.accent : COLORS.textSecondary,
+              fontSize: 11,
+              fontWeight: "700",
+              letterSpacing: 1.3,
+              textTransform: "uppercase",
+            }}
+          >
+            {gpsLabel}
+          </Text>
+        </View>
+
+        <View
+          style={{
+            backgroundColor: "rgba(255,255,255,0.02)",
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            paddingVertical: 14,
+            flexDirection: "row",
+            marginBottom: 14,
+          }}
+        >
+          <MetricCell label="Time" value={formatDuration(duration)} />
+          <MetricCell label="Avg Pace" value={paceDisplay} unit="/km" />
+          <MetricCell
+            label="Distance"
+            value={distance.toFixed(2)}
+            valueColor={isRunning ? COLORS.accent : COLORS.white}
+            unit="km"
+          />
+        </View>
+
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 14,
+          }}
+        >
+          <Text
+            style={{
+              color: COLORS.textSecondary,
+              fontSize: 14,
+              fontWeight: "600",
+              letterSpacing: 0.2,
+            }}
+          >
+            {speedKmh.toFixed(1)} km/h
+          </Text>
+          <Text
+            style={{
+              color: COLORS.textTertiary,
+              fontSize: 13,
+              fontWeight: "600",
+            }}
+          >
+            Accuracy {accuracyLabel}
+          </Text>
+        </View>
+
+        <View style={{ alignItems: "center" }}>
+          <TouchableOpacity
+            onPress={isRunning ? onStopRun : onStartRun}
+            activeOpacity={0.85}
+            style={{
+              width: 84,
+              height: 84,
+              borderRadius: 42,
+              backgroundColor: isRunning ? COLORS.red : COLORS.orange,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.28)",
+            }}
+          >
+            {isRunning ? (
+              <Square size={28} color={COLORS.white} fill={COLORS.white} />
+            ) : (
+              <Play size={32} color={COLORS.black} fill={COLORS.black} />
+            )}
+          </TouchableOpacity>
+          <Text
+            style={{
+              color: isRunning ? COLORS.red : COLORS.orange,
+              fontSize: 13,
+              fontWeight: "700",
+              marginTop: 10,
+              letterSpacing: 0.3,
+            }}
+          >
+            {isRunning ? "Finish" : "Start"}
+          </Text>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { data: user } = useUser();
+  const {
+    isRunning,
+    distance,
+    duration,
+    paceDisplay,
+    speedKmh,
+    gpsStatus,
+    currentAccuracy,
+    currentCoords,
+    startRun,
+    stopRun,
+  } = useRunTracker();
   const mapRef = useRef(null);
   const [location, setLocation] = useState(null);
   const [locationPermission, setLocationPermission] = useState("loading");
@@ -470,6 +682,11 @@ export default function MapScreen() {
     latitudeDelta: 0.02,
     longitudeDelta: 0.02,
   });
+
+  useEffect(() => {
+    if (!currentCoords) return;
+    setLocation((prev) => prev || currentCoords);
+  }, [currentCoords]);
 
   useEffect(() => {
     let isMounted = true;
@@ -565,18 +782,27 @@ export default function MapScreen() {
     [myTerritories],
   );
 
+  const gpsLabel = useMemo(() => {
+    if (!isRunning) return "GPS Ready";
+    if (gpsStatus === "acquiring") return "Acquiring GPS";
+    if (gpsStatus === "waiting") return "Waiting for cleaner GPS";
+    if (gpsStatus === "ready") return "GPS Locked";
+    return "Tracking Live";
+  }, [gpsStatus, isRunning]);
+
   const centerOnUser = useCallback(() => {
-    if (!location || !mapRef.current) return;
+    const target = currentCoords || location;
+    if (!target || !mapRef.current) return;
     mapRef.current.animateToRegion(
       {
-        latitude: location.latitude,
-        longitude: location.longitude,
+        latitude: target.latitude,
+        longitude: target.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       },
       500,
     );
-  }, [location]);
+  }, [currentCoords, location]);
 
   const handleRegionChangeComplete = useCallback((nextRegion) => {
     setRegion(nextRegion);
@@ -665,6 +891,8 @@ export default function MapScreen() {
     </View>
   );
 
+  const utilityControlBottom = insets.bottom + 320;
+
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <StatusBar style="light" />
@@ -715,7 +943,7 @@ export default function MapScreen() {
                 position: "absolute",
                 left: 16,
                 right: 16,
-                bottom: 100,
+                bottom: utilityControlBottom,
                 backgroundColor: COLORS.surface,
                 borderRadius: 18,
                 padding: 14,
@@ -747,11 +975,11 @@ export default function MapScreen() {
 
           <TouchableOpacity
             onPress={centerOnUser}
-            disabled={!location}
+            disabled={!location && !currentCoords}
             style={{
               position: "absolute",
               right: 16,
-              bottom: 100,
+              bottom: utilityControlBottom,
               width: 48,
               height: 48,
               borderRadius: 24,
@@ -760,7 +988,7 @@ export default function MapScreen() {
               borderColor: COLORS.borderLight,
               alignItems: "center",
               justifyContent: "center",
-              opacity: location ? 1 : 0.5,
+              opacity: location || currentCoords ? 1 : 0.5,
             }}
           >
             <Crosshair size={22} color={COLORS.accent} />
@@ -782,6 +1010,19 @@ export default function MapScreen() {
           />
         </>
       )}
+
+      <TrackingDock
+        isRunning={isRunning}
+        duration={duration}
+        paceDisplay={paceDisplay}
+        distance={distance}
+        speedKmh={speedKmh}
+        currentAccuracy={currentAccuracy}
+        gpsLabel={gpsLabel}
+        onStartRun={startRun}
+        onStopRun={stopRun}
+        bottomInset={insets.bottom}
+      />
     </View>
   );
 }
