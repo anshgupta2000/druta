@@ -4,6 +4,7 @@ import useAuth from "@/utils/useAuth";
 function MainComponent() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [devMode, setDevMode] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -33,6 +34,32 @@ function MainComponent() {
     }
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let isMounted = true;
+
+    fetch("/api/auth/dev-mode")
+      .then((response) => response.json())
+      .then((data) => {
+        if (!isMounted) return;
+        setDevMode(Boolean(data?.devMode));
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setDevMode(true);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const getCallbackUrl = () => {
+    if (typeof window === "undefined") return "/";
+    const params = new URLSearchParams(window.location.search);
+    return params.get("callbackUrl") || "/";
+  };
+
   const onSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -43,10 +70,32 @@ function MainComponent() {
       return;
     }
     try {
+      if (devMode) {
+        const response = await fetch("/api/auth/dev-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email,
+            password,
+            callbackUrl: getCallbackUrl(),
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to start dev auth session");
+        }
+
+        const data = await response.json();
+        window.location.assign(data?.redirectTo || "/");
+        return;
+      }
+
       await signInWithCredentials({
         email,
         password,
-        callbackUrl: "/",
+        callbackUrl: getCallbackUrl(),
         redirect: true,
       });
     } catch (err) {
