@@ -97,7 +97,7 @@ function NativeMapContent({
       provider={provider}
       mapType={mapType}
       style={{ flex: 1 }}
-      initialRegion={region}
+      region={region}
       onRegionChangeComplete={onRegionChangeComplete}
       customMapStyle={customMapStyle}
       showsUserLocation={true}
@@ -511,6 +511,9 @@ function TrackingDock({
   gpsLabel,
   onStartRun,
   onStopRun,
+  onLocateUser,
+  isLocatingUser,
+  showLocateButton,
   bottomInset,
 }) {
   const accuracyLabel =
@@ -618,38 +621,75 @@ function TrackingDock({
           </Text>
         </View>
 
-        <View style={{ alignItems: "center" }}>
-          <TouchableOpacity
-            onPress={isRunning ? onStopRun : onStartRun}
-            activeOpacity={0.85}
-            style={{
-              width: 84,
-              height: 84,
-              borderRadius: 42,
-              backgroundColor: isRunning ? COLORS.red : COLORS.orange,
-              alignItems: "center",
-              justifyContent: "center",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.28)",
-            }}
-          >
-            {isRunning ? (
-              <Square size={28} color={COLORS.white} fill={COLORS.white} />
-            ) : (
-              <Play size={32} color={COLORS.black} fill={COLORS.black} />
-            )}
-          </TouchableOpacity>
-          <Text
-            style={{
-              color: isRunning ? COLORS.red : COLORS.orange,
-              fontSize: 13,
-              fontWeight: "700",
-              marginTop: 10,
-              letterSpacing: 0.3,
-            }}
-          >
-            {isRunning ? "Finish" : "Start"}
-          </Text>
+        <View
+          style={{
+            alignItems: "center",
+            position: "relative",
+            minHeight: 112,
+            width: "100%",
+          }}
+        >
+          <View style={{ alignItems: "center" }}>
+            <TouchableOpacity
+              onPress={isRunning ? onStopRun : onStartRun}
+              activeOpacity={0.85}
+              style={{
+                width: 84,
+                height: 84,
+                borderRadius: 42,
+                backgroundColor: isRunning ? COLORS.red : COLORS.orange,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.28)",
+              }}
+            >
+              {isRunning ? (
+                <Square size={28} color={COLORS.white} fill={COLORS.white} />
+              ) : (
+                <Play size={32} color={COLORS.black} fill={COLORS.black} />
+              )}
+            </TouchableOpacity>
+            <Text
+              style={{
+                color: isRunning ? COLORS.red : COLORS.orange,
+                fontSize: 13,
+                fontWeight: "700",
+                marginTop: 10,
+                letterSpacing: 0.3,
+              }}
+            >
+              {isRunning ? "Finish" : "Start"}
+            </Text>
+          </View>
+
+          {showLocateButton ? (
+            <TouchableOpacity
+              onPress={onLocateUser}
+              disabled={isLocatingUser}
+              activeOpacity={0.85}
+              style={{
+                position: "absolute",
+                right: 12,
+                top: 16,
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: COLORS.surface,
+                borderWidth: 1,
+                borderColor: COLORS.borderLight,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: isLocatingUser ? 0.6 : 1,
+              }}
+            >
+              {isLocatingUser ? (
+                <ActivityIndicator size="small" color={COLORS.accent} />
+              ) : (
+                <Crosshair size={20} color={COLORS.accent} />
+              )}
+            </TouchableOpacity>
+          ) : null}
         </View>
       </Animated.View>
     </View>
@@ -676,6 +716,7 @@ export default function MapScreen() {
   const [locationPermission, setLocationPermission] = useState("loading");
   const [locationError, setLocationError] = useState(null);
   const [mapReady, setMapReady] = useState(false);
+  const [isLocatingUser, setIsLocatingUser] = useState(false);
   const [region, setRegion] = useState({
     latitude: 12.9716,
     longitude: 77.5946,
@@ -685,8 +726,38 @@ export default function MapScreen() {
 
   useEffect(() => {
     if (!currentCoords) return;
-    setLocation((prev) => prev || currentCoords);
+    setLocation(currentCoords);
   }, [currentCoords]);
+
+  const centerMapOnCoords = useCallback((coords) => {
+    if (!coords) return;
+    const nextRegion = {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
+    };
+
+    setRegion(nextRegion);
+    const map = mapRef.current;
+    if (map?.animateCamera) {
+      map.animateCamera(
+        {
+          center: {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          },
+          zoom: 17,
+        },
+        { duration: 500 },
+      );
+      return;
+    }
+
+    if (map?.animateToRegion) {
+      map.animateToRegion(nextRegion, 500);
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -722,12 +793,7 @@ export default function MapScreen() {
         if (!isMounted) return;
 
         setLocation(loc.coords);
-        setRegion({
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        });
+        centerMapOnCoords(loc.coords);
       } catch (err) {
         console.error("Location error:", err);
         if (!isMounted) return;
@@ -741,7 +807,7 @@ export default function MapScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [centerMapOnCoords]);
 
   const minGrid = latLngToGrid(
     region.latitude - region.latitudeDelta,
@@ -790,19 +856,71 @@ export default function MapScreen() {
     return "Tracking Live";
   }, [gpsStatus, isRunning]);
 
-  const centerOnUser = useCallback(() => {
-    const target = currentCoords || location;
-    if (!target || !mapRef.current) return;
-    mapRef.current.animateToRegion(
-      {
-        latitude: target.latitude,
-        longitude: target.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      },
-      500,
-    );
-  }, [currentCoords, location]);
+  const centerOnUser = useCallback(async () => {
+    if (isLocatingUser) {
+      return;
+    }
+
+    setIsLocatingUser(true);
+
+    try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setLocationPermission("denied");
+        setLocationError("Turn on location services to center the map on you.");
+        return;
+      }
+
+      const existingPermission = await Location.getForegroundPermissionsAsync();
+      const permission =
+        existingPermission.status === "granted"
+          ? existingPermission
+          : await Location.requestForegroundPermissionsAsync();
+
+      setLocationPermission(permission.status);
+      if (permission.status !== "granted") {
+        setLocationError(
+          "Location access is off. The map is still visible, but it won't center on your live position.",
+        );
+        return;
+      }
+
+      const immediateTarget = currentCoords || location;
+      if (immediateTarget) {
+        centerMapOnCoords(immediateTarget);
+      }
+
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (
+        Number.isFinite(lastKnown?.coords?.latitude) &&
+        Number.isFinite(lastKnown?.coords?.longitude)
+      ) {
+        setLocation(lastKnown.coords);
+        centerMapOnCoords(lastKnown.coords);
+      }
+
+      const liveLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        mayShowUserSettingsDialog: true,
+        maximumAge: 3000,
+        timeout: 15000,
+      });
+
+      setLocation(liveLocation.coords);
+      setLocationError(null);
+      centerMapOnCoords(liveLocation.coords);
+    } catch (err) {
+      console.error("Center on user error:", err);
+      const fallback = currentCoords || location;
+      if (fallback) {
+        centerMapOnCoords(fallback);
+        return;
+      }
+      setLocationError("Could not get your current location.");
+    } finally {
+      setIsLocatingUser(false);
+    }
+  }, [centerMapOnCoords, currentCoords, isLocatingUser, location]);
 
   const handleRegionChangeComplete = useCallback((nextRegion) => {
     setRegion(nextRegion);
@@ -973,26 +1091,6 @@ export default function MapScreen() {
             </View>
           ) : null}
 
-          <TouchableOpacity
-            onPress={centerOnUser}
-            disabled={!location && !currentCoords}
-            style={{
-              position: "absolute",
-              right: 16,
-              bottom: utilityControlBottom,
-              width: 48,
-              height: 48,
-              borderRadius: 24,
-              backgroundColor: COLORS.surface,
-              borderWidth: 1,
-              borderColor: COLORS.borderLight,
-              alignItems: "center",
-              justifyContent: "center",
-              opacity: location || currentCoords ? 1 : 0.5,
-            }}
-          >
-            <Crosshair size={22} color={COLORS.accent} />
-          </TouchableOpacity>
         </>
       )}
 
@@ -1021,6 +1119,9 @@ export default function MapScreen() {
         gpsLabel={gpsLabel}
         onStartRun={startRun}
         onStopRun={stopRun}
+        onLocateUser={centerOnUser}
+        isLocatingUser={isLocatingUser}
+        showLocateButton={!isWeb}
         bottomInset={insets.bottom}
       />
     </View>
