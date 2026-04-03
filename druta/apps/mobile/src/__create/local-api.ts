@@ -492,10 +492,9 @@ const handleTerritories = (method: string, auth: AuthPayload, url: URL, init?: R
 };
 
 export const shouldUseLocalApiFallback = () => {
-  return (
-    process.env.EXPO_PUBLIC_FORCE_LOCAL_API === 'true' ||
-    !process.env.EXPO_PUBLIC_PROXY_BASE_URL
-  );
+  // Local API fallback must be an explicit opt-in. We do not silently switch
+  // to in-memory state for QA/production-style environments.
+  return process.env.EXPO_PUBLIC_FORCE_LOCAL_API === 'true';
 };
 
 export const handleLocalApiRequest = async ({

@@ -3,7 +3,9 @@
   "main": "index",
   "version": "1.0.0",
   "scripts": {
-    "start": "expo start",
+    "start": "node ./scripts/start-phone.mjs",
+    "start:lan": "expo start --lan --clear",
+    "start:phone": "node ./scripts/start-phone.mjs",
     "web": "expo start --web",
     "ios": "expo start --ios",
     "android": "expo start --android",

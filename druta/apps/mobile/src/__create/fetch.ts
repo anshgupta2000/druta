@@ -54,9 +54,20 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
   }
 
   let finalInput = input;
-  const baseURL = isSecondPartyURL(url) ? secondPartyURL : firstPartyURL;
+  const baseURL = isSecondPartyURL(url)
+    ? secondPartyURL || firstPartyURL
+    : firstPartyURL;
   if (typeof input === 'string') {
-    finalInput = input.startsWith('/') ? `${baseURL}${input}` : input;
+    if (input.startsWith('/')) {
+      if (!baseURL) {
+        throw new Error(
+          'Missing EXPO_PUBLIC_BASE_URL. Set EXPO_PUBLIC_BASE_URL and EXPO_PUBLIC_PROXY_BASE_URL to your web API origin.'
+        );
+      }
+      finalInput = `${baseURL}${input}`;
+    } else {
+      finalInput = input;
+    }
   } else {
     return expoFetch(input, init);
   }
