@@ -7,7 +7,7 @@ export default function CreateAuth() {
 		const token = await getToken({
 			req: c.req.raw,
 			secret: process.env.AUTH_SECRET,
-			secureCookie: process.env.AUTH_URL.startsWith('https'),
+			secureCookie: Boolean(process.env.AUTH_URL?.startsWith('https')),
 		});
 		if (token) {
 			return {

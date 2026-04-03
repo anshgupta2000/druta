@@ -4,7 +4,12 @@
 	"type": "module",
 	"scripts": {
 		"dev": "react-router dev",
-		"typecheck": "react-router typegen && tsc --noEmit"
+		"typecheck": "react-router typegen && tsc --noEmit",
+		"db:migrate": "node ./scripts/migrate.mjs",
+		"smoke:e2e": "node ./scripts/smoke-e2e.mjs",
+		"ngrok:start-free": "bash ./scripts/start-ngrok-free.sh",
+		"ngrok:sync-env": "node ./scripts/sync-ngrok-env.mjs",
+		"ngrok:doctor": "node ./scripts/ngrok-doctor.mjs"
 	},
 	"dependencies": {
 		"@auth/core": "^0.37.2",

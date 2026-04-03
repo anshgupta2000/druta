@@ -1,5 +1,6 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
+import { ensureAuthUser } from "@/app/api/utils/users";
 
 export async function GET(request) {
   try {
@@ -7,7 +8,8 @@ export async function GET(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
 
     const friends = await sql`
       SELECT f.id, f.status, f.created_at,
@@ -42,7 +44,8 @@ export async function POST(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const body = await request.json();
     const { friend_username, action, friend_request_id } = body;
 

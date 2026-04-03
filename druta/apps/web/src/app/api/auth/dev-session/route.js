@@ -1,6 +1,15 @@
 import { buildDevAuthCookie, createDevAuthSession } from '../utils/dev-auth';
 
 export async function POST(request) {
+	const hostedAuthConfigured = Boolean(process.env.AUTH_SECRET && process.env.AUTH_URL);
+	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true';
+	if (hostedAuthConfigured && !allowDevAuth) {
+		return new Response(JSON.stringify({ error: 'Dev auth is disabled' }), {
+			status: 403,
+			headers: { 'Content-Type': 'application/json' },
+		});
+	}
+
 	let body = null;
 	try {
 		body = await request.json();

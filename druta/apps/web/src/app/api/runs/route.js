@@ -1,5 +1,6 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
+import { ensureAuthUser } from "@/app/api/utils/users";
 
 export async function GET(request) {
   try {
@@ -7,7 +8,8 @@ export async function GET(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const runs = await sql`
       SELECT id, distance_km, duration_seconds, avg_pace, territories_claimed, started_at, ended_at
       FROM runs WHERE user_id = ${userId}
@@ -26,7 +28,8 @@ export async function POST(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const body = await request.json();
     const {
       distance_km,

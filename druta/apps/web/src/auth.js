@@ -5,6 +5,8 @@
  */
 import CreateAuth from '@auth/create';
 import Credentials from '@auth/core/providers/credentials';
+import { getContext } from 'hono/context-storage';
+import { getDevAuthSession } from '@/app/api/auth/utils/dev-auth';
 
 const result = CreateAuth({
 	providers: [
@@ -26,4 +28,43 @@ const result = CreateAuth({
 		signOut: '/account/logout',
 	},
 });
-export const { auth } = result;
+
+const { auth: createAuth } = result;
+
+const allowDevAuthFallback = () => {
+	return process.env.ALLOW_DEV_AUTH === 'true' || !(process.env.AUTH_SECRET && process.env.AUTH_URL);
+};
+
+export const auth = async () => {
+	let session = null;
+	try {
+		session = await createAuth();
+	} catch {
+		session = null;
+	}
+	if (session?.user?.id || !allowDevAuthFallback()) {
+		return session;
+	}
+
+	try {
+		const context = getContext();
+		const request = context?.req?.raw;
+		if (!request) {
+			return session;
+		}
+		const devSession = getDevAuthSession(request);
+		if (!devSession?.user?.id) {
+			return session;
+		}
+		return {
+			user: {
+				id: devSession.user.id,
+				email: devSession.user.email,
+				name: devSession.user.name,
+			},
+			expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+		};
+	} catch {
+		return session;
+	}
+};

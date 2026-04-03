@@ -1,5 +1,6 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
+import { ensureAuthUser } from "@/app/api/utils/users";
 
 // Get territories for a bounding box
 export async function GET(request) {
@@ -34,7 +35,8 @@ export async function POST(request) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const body = await request.json();
     const { grid_lat, grid_lng, distance_in_grid } = body;
 

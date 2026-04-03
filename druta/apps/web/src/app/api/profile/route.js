@@ -1,5 +1,6 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
+import { ensureAuthUser } from "@/app/api/utils/users";
 
 export async function GET() {
   try {
@@ -7,10 +8,7 @@ export async function GET() {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
-    const rows =
-      await sql`SELECT id, name, email, image, username, total_distance_km, total_runs, territories_owned, wins, losses, avatar_color, avatar_url, avatar_code, avatar_thumbnail_url, outfit_loadout FROM auth_users WHERE id = ${userId} LIMIT 1`;
-    const user = rows?.[0] || null;
+    const user = await ensureAuthUser(session.user);
     return Response.json({ user });
   } catch (err) {
     console.error("GET /api/profile error", err);
@@ -24,7 +22,8 @@ export async function PUT(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const existing = await ensureAuthUser(session.user);
+    const userId = existing?.id || session.user.id;
     const body = await request.json();
     const {
       username,

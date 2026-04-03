@@ -1,5 +1,6 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
+import { ensureAuthUser } from "@/app/api/utils/users";
 
 export async function GET(request) {
   try {
@@ -7,7 +8,8 @@ export async function GET(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
 
@@ -50,7 +52,8 @@ export async function POST(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const body = await request.json();
     const { opponent_id, race_type, target_value } = body;
 
@@ -80,7 +83,8 @@ export async function PUT(request) {
     if (!session || !session.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const userId = session.user.id;
+    const profile = await ensureAuthUser(session.user);
+    const userId = profile?.id || session.user.id;
     const body = await request.json();
     const { race_id, action, distance } = body;
 
