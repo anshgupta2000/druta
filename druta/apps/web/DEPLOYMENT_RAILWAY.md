@@ -17,8 +17,10 @@ This guide deploys the backend currently located in `druta/apps/web`.
 ## 2. Create Railway Service
 1. Create a new Railway service from this repo.
 2. Set service root to `druta/apps/web`.
-3. Build command: `bun install && bun run build`
-4. Start command: `bun run start`
+3. Recommended: use Dockerfile build (this repo now includes `druta/apps/web/Dockerfile`).
+4. If you stay on Railpack:
+   1. Build command: `bun install && bun run build`
+   2. Start command: `bun run start`
 
 ## 3. Configure Production Environment Variables
 Set these in Railway service variables:
@@ -62,6 +64,18 @@ Restart Expo:
 ## 7. Rollback Plan
 1. Revert to previous Railway deployment in the Deployments tab.
 2. Keep DB schema as-is (migration is additive and idempotent in current baseline).
+
+## 8. Railway Build Troubleshooting
+If build fails with `secret ID missing for "" environment variable`:
+1. This is a Railway/Railpack variable parsing issue (not app compile failure).
+2. In Railway Variables, check both:
+   1. Service variables
+   2. Project/shared variables
+3. Remove/recreate variables using **New Variable** (avoid pasted malformed raw entries).
+4. Redeploy.
+5. If it still fails, force Dockerfile build:
+   1. Set `RAILWAY_DOCKERFILE_PATH=Dockerfile`
+   2. Redeploy (this bypasses the Railpack secret-mount path).
 
 ## Notes
 1. Once deployed, ngrok is not required for backend access from mobile.
