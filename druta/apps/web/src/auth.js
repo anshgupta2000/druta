@@ -7,6 +7,7 @@ import CreateAuth from '@auth/create';
 import Credentials from '@auth/core/providers/credentials';
 import { getContext } from 'hono/context-storage';
 import { getDevAuthSession } from '@/app/api/auth/utils/dev-auth';
+import { hasHostedAuthConfig } from '@/app/api/auth/utils/auth-config';
 
 const result = CreateAuth({
 	providers: [
@@ -32,7 +33,7 @@ const result = CreateAuth({
 const { auth: createAuth } = result;
 
 const allowDevAuthFallback = () => {
-	return process.env.ALLOW_DEV_AUTH === 'true' || !(process.env.AUTH_SECRET && process.env.AUTH_URL);
+	return process.env.ALLOW_DEV_AUTH === 'true' || !hasHostedAuthConfig();
 };
 
 export const auth = async () => {

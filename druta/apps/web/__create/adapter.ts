@@ -7,6 +7,14 @@ import type {
 import type { ProviderType } from '@auth/core/providers';
 import type { Pool } from '@neondatabase/serverless';
 
+const normalizeEmail = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+};
+
 interface NeonUser extends AdapterUser {
   accounts: {
     provider: string;
@@ -68,13 +76,14 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
 
     async createUser(user: Omit<AdapterUser, 'id'>) {
       const { name, email, emailVerified, image } = user;
+      const normalizedEmail = normalizeEmail(email);
       const sql = `
         INSERT INTO auth_users (name, email, "emailVerified", image)
         VALUES ($1, $2, $3, $4)
         RETURNING id, name, email, "emailVerified", image`;
       const result = await client.query(sql, [
         name,
-        email,
+        normalizedEmail,
         emailVerified,
         image,
       ]);
@@ -90,8 +99,12 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       }
     },
     async getUserByEmail(email) {
-      const sql = 'select * from auth_users where email = $1';
-      const result = await client.query(sql, [email]);
+      const normalizedEmail = normalizeEmail(email);
+      if (!normalizedEmail) {
+        return null;
+      }
+      const sql = 'select * from auth_users where lower(email) = lower($1)';
+      const result = await client.query(sql, [normalizedEmail]);
       if (result.rowCount === 0) {
         return null;
       }
@@ -130,6 +143,7 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       };
 
       const { id, name, email, emailVerified, image } = newUser;
+      const normalizedEmail = normalizeEmail(email);
       const updateSql = `
         UPDATE auth_users set
         name = $2, email = $3, "emailVerified" = $4, image = $5
@@ -139,7 +153,7 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       const query2 = await client.query(updateSql, [
         id,
         name,
-        email,
+        normalizedEmail,
         emailVerified,
         image,
       ]);

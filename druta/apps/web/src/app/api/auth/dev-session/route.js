@@ -1,7 +1,8 @@
 import { buildDevAuthCookie, createDevAuthSession } from '../utils/dev-auth';
+import { getSecureCookieFlag, hasHostedAuthConfig } from '../utils/auth-config';
 
 export async function POST(request) {
-	const hostedAuthConfigured = Boolean(process.env.AUTH_SECRET && process.env.AUTH_URL);
+	const hostedAuthConfigured = hasHostedAuthConfig();
 	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true';
 	if (hostedAuthConfigured && !allowDevAuth) {
 		return new Response(JSON.stringify({ error: 'Dev auth is disabled' }), {
@@ -35,7 +36,7 @@ export async function POST(request) {
 	});
 	headers.append(
 		'Set-Cookie',
-		buildDevAuthCookie(session, Boolean(process.env.AUTH_URL?.startsWith('https')))
+		buildDevAuthCookie(session, getSecureCookieFlag())
 	);
 
 	return new Response(

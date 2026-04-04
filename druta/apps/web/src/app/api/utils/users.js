@@ -83,6 +83,7 @@ export async function ensureAuthUser(user) {
       SET name = COALESCE(EXCLUDED.name, auth_users.name),
           email = COALESCE(EXCLUDED.email, auth_users.email),
           image = COALESCE(EXCLUDED.image, auth_users.image),
+          username = COALESCE(auth_users.username, EXCLUDED.username),
           updated_at = NOW()
     RETURNING id, name, email, image, username, total_distance_km, total_runs, territories_owned, wins, losses, avatar_color, avatar_url, avatar_code, avatar_thumbnail_url, outfit_loadout
   `;

@@ -21,6 +21,26 @@ import { API_BASENAME, api } from './route-builder';
 neonConfig.webSocketConstructor = ws;
 
 const als = new AsyncLocalStorage<{ requestId: string }>();
+const authProtocolRegex = /^https?:\/\//i;
+const localHostRegex =
+  /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/i;
+
+const normalizeAuthUrl = (value: string | undefined) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (authProtocolRegex.test(trimmed)) return trimmed;
+
+  const clean = trimmed.replace(/^\/+/, '');
+  const host = clean.split('/')[0]?.toLowerCase() || '';
+  const protocol = localHostRegex.test(host) ? 'http' : 'https';
+  return `${protocol}://${clean}`;
+};
+
+const normalizedAuthUrl = normalizeAuthUrl(process.env.AUTH_URL);
+if (normalizedAuthUrl && process.env.AUTH_URL !== normalizedAuthUrl) {
+  process.env.AUTH_URL = normalizedAuthUrl;
+}
 
 for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
   const original = nodeConsole[method].bind(console);

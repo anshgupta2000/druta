@@ -74,8 +74,8 @@ export const AuthModal = () => {
   const inferredLocalAuthBaseURL = React.useMemo(() => getInferredLocalAuthBaseURL(), []);
   const baseURL =
     process.env.EXPO_PUBLIC_AUTH_BASE_URL ||
-    inferredLocalAuthBaseURL ||
-    process.env.EXPO_PUBLIC_BASE_URL;
+    process.env.EXPO_PUBLIC_BASE_URL ||
+    inferredLocalAuthBaseURL;
   const proxyURL =
     process.env.EXPO_PUBLIC_AUTH_PROXY_BASE_URL ||
     process.env.EXPO_PUBLIC_PROXY_BASE_URL ||

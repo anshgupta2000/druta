@@ -1,5 +1,7 @@
+import { hasHostedAuthConfig } from "../utils/auth-config";
+
 export async function GET() {
-	const hostedAuthConfigured = Boolean(process.env.AUTH_SECRET && process.env.AUTH_URL);
+	const hostedAuthConfigured = hasHostedAuthConfig();
 	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true';
 	return new Response(
 		JSON.stringify({

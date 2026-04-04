@@ -1,11 +1,12 @@
 import { getToken } from '@auth/core/jwt';
 import { getDevAuthSession } from '../utils/dev-auth';
+import { getSecureCookieFlag, hasHostedAuthConfig } from '../utils/auth-config';
 import { ensureAuthUser } from '@/app/api/utils/users';
 
 export async function GET(request) {
-	const hasHostedAuth = Boolean(process.env.AUTH_SECRET && process.env.AUTH_URL);
+	const hasHostedAuth = hasHostedAuthConfig();
 	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true' || !hasHostedAuth;
-	const secureCookie = Boolean(process.env.AUTH_URL?.startsWith('https'));
+	const secureCookie = getSecureCookieFlag();
 
 	let token = null;
 	let jwt = null;
