@@ -164,13 +164,28 @@ export const AuthWebView = ({ mode, proxyURL, baseURL }) => {
         return false;
       }
 
-      parsedURL.searchParams.set('callbackUrl', callbackUrl);
-      const nextUrl = parsedURL.toString();
-      if (nextUrl === currentURI) {
+      // Never rewrite Auth.js callback/signin/signout endpoints because
+      // those include POST navigations and redirect semantics.
+      if (parsedURL.pathname.startsWith('/api/auth/')) {
         return true;
       }
-      setURI(nextUrl);
-      return false;
+
+      // Keep callbackUrl pinned only for account pages. This avoids intercepting
+      // arbitrary navigations and prevents white-screen dead ends.
+      if (parsedURL.pathname.startsWith('/account/')) {
+        if (parsedURL.searchParams.get('callbackUrl') === callbackUrl) {
+          return true;
+        }
+        parsedURL.searchParams.set('callbackUrl', callbackUrl);
+        const nextUrl = parsedURL.toString();
+        if (nextUrl === currentURI) {
+          return true;
+        }
+        setURI(nextUrl);
+        return false;
+      }
+
+      return true;
     },
     [allowedOrigins, baseURL, completeTokenExchange, currentURI, proxyURL]
   );
