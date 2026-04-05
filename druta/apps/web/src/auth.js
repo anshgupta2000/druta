@@ -10,6 +10,7 @@ import { getDevAuthSession } from '@/app/api/auth/utils/dev-auth';
 import { hasHostedAuthConfig } from '@/app/api/auth/utils/auth-config';
 
 const result = CreateAuth({
+	basePath: '/api/auth',
 	providers: [
 		Credentials({
 			credentials: {
