@@ -73,6 +73,15 @@ const createDevSession = async ({ email, name }) => {
   return result.cookie;
 };
 
+const latLngToGrid = (lat, lng) => {
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  return {
+    gridLat: Math.floor((lat * metersPerDegreeLat) / 200),
+    gridLng: Math.floor((lng * metersPerDegreeLng) / 200),
+  };
+};
+
 const run = async () => {
   console.log(`Smoke E2E target: ${baseUrl}`);
 
@@ -101,42 +110,71 @@ const run = async () => {
   assert.ok(userAId, 'Missing user A id');
   assert.ok(userBId, 'Missing user B id');
 
-  const runResult = await request('/api/runs', {
+  const runStartedAt = new Date(Date.now() - 900000).toISOString();
+  const runSessionStart = await request('/api/runs/live/start', {
+    method: 'POST',
+    cookie: cookieA,
+    body: { started_at: runStartedAt },
+  });
+  ensureOk(runSessionStart, 'Start live run session for user A');
+  const runSessionId = runSessionStart.data?.run_session_id;
+  assert.ok(runSessionId, 'run_session_id missing');
+
+  const now = Date.now();
+  const routePoints = [
+    { latitude: 37.7749, longitude: -122.4194, timestamp: now - 120000, accuracy: 8 },
+    { latitude: 37.7752, longitude: -122.419, timestamp: now - 90000, accuracy: 7 },
+    { latitude: 37.7755, longitude: -122.4186, timestamp: now - 60000, accuracy: 6 },
+    { latitude: 37.7758, longitude: -122.4182, timestamp: now - 30000, accuracy: 6 },
+  ];
+
+  const liveChunkResult = await request('/api/runs/live/chunk', {
     method: 'POST',
     cookie: cookieA,
     body: {
+      run_session_id: runSessionId,
+      seq: 1,
+      points: routePoints,
+    },
+  });
+  ensureOk(liveChunkResult, 'Upload live run chunk for user A');
+
+  const runFinishResult = await request('/api/runs/live/finish', {
+    method: 'POST',
+    cookie: cookieA,
+    body: {
+      run_session_id: runSessionId,
       distance_km: 2.5,
       duration_seconds: 900,
       avg_pace: 10,
-      territories_claimed: 1,
-      route_data: JSON.stringify([
-        { latitude: 37.7749, longitude: -122.4194, timestamp: Date.now() - 10000 },
-        { latitude: 37.7754, longitude: -122.4189, timestamp: Date.now() },
-      ]),
-      started_at: new Date(Date.now() - 900000).toISOString(),
+      started_at: runStartedAt,
     },
   });
-  ensureOk(runResult, 'Create run for user A');
-  assert.ok(runResult.data?.run?.id, 'Run id missing');
+  ensureOk(runFinishResult, 'Finish live run for user A');
+  assert.ok(runFinishResult.data?.run?.id, 'Run id missing after live finish');
 
-  const gridLat = 123456 + (idSuffix % 50);
-  const gridLng = 654321 + (idSuffix % 50);
-  const claimResult = await request('/api/territories', {
-    method: 'POST',
-    cookie: cookieA,
-    body: { grid_lat: gridLat, grid_lng: gridLng },
-  });
-  ensureOk(claimResult, 'Claim territory for user A');
-  assert.ok(claimResult.data?.territory, 'Territory write missing');
-
+  const routeGrids = routePoints.map((point) => latLngToGrid(point.latitude, point.longitude));
+  const minGridLat = Math.min(...routeGrids.map((item) => item.gridLat)) - 2;
+  const maxGridLat = Math.max(...routeGrids.map((item) => item.gridLat)) + 2;
+  const minGridLng = Math.min(...routeGrids.map((item) => item.gridLng)) - 2;
+  const maxGridLng = Math.max(...routeGrids.map((item) => item.gridLng)) + 2;
   const territoriesResult = await request(
-    `/api/territories?minLat=${gridLat - 1}&maxLat=${gridLat + 1}&minLng=${gridLng - 1}&maxLng=${gridLng + 1}`
+    `/api/territories?minLat=${minGridLat}&maxLat=${maxGridLat}&minLng=${minGridLng}&maxLng=${maxGridLng}`
   );
   ensureOk(territoriesResult, 'Read territories window');
-  const territoryFound = (territoriesResult.data?.territories || []).some(
-    (entry) => entry.grid_lat === gridLat && entry.grid_lng === gridLng && entry.owner_id === userAId
+  const routeGridSet = new Set(routeGrids.map((item) => `${item.gridLat}:${item.gridLng}`));
+  const territoryFound = (territoriesResult.data?.territories || []).some((entry) => {
+    return routeGridSet.has(`${entry.grid_lat}:${entry.grid_lng}`) && entry.owner_id === userAId;
+  });
+  assert.equal(territoryFound, true, 'Expected claimed territory not found in route window');
+
+  const runListResult = await request('/api/runs', { cookie: cookieA });
+  ensureOk(runListResult, 'Read runs after live finish');
+  const claimedFromRunHistory = (runListResult.data?.runs || []).some(
+    (entry) =>
+      Number(entry.id) === Number(runFinishResult.data?.run?.id) && Number(entry.territories_claimed) > 0
   );
-  assert.equal(territoryFound, true, 'Expected claimed territory not found in read window');
+  assert.equal(claimedFromRunHistory, true, 'Run history did not record territories_claimed');
 
   const challengeResult = await request('/api/races', {
     method: 'POST',

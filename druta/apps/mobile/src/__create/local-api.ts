@@ -78,20 +78,71 @@ type LocalTerritory = {
   last_run_at: string;
 };
 
+type LocalRunSession = {
+  id: number;
+  user_id: string;
+  status: 'active' | 'finished' | 'aborted';
+  started_at: string;
+  ended_at: string | null;
+  last_seq: number;
+  last_point: {
+    latitude: number;
+    longitude: number;
+    timestamp: number;
+    accuracy: number | null;
+  } | null;
+  territories_claimed: number;
+  territories_captured: number;
+  territories_strengthened: number;
+  total_segments_applied: number;
+  total_segments_rejected: number;
+  run_id: number | null;
+};
+
 const state: {
   users: Map<string, LocalUser>;
   runs: LocalRun[];
+  runSessions: LocalRunSession[];
+  runSessionChunks: Map<
+    string,
+    {
+      point_count: number;
+      applied_segments: number;
+      rejected_segments: number;
+      changed_tiles: Array<Record<string, unknown>>;
+    }
+  >;
+  territoryContributions: Map<string, Map<string, number>>;
+  runSessionTileStats: Map<
+    string,
+    {
+      distance_m: number;
+      was_claimed: boolean;
+      was_captured: boolean;
+      was_strengthened: boolean;
+    }
+  >;
   friends: LocalFriend[];
   races: LocalRace[];
   territories: LocalTerritory[];
-  ids: { run: number; friend: number; race: number; territory: number };
+  ids: {
+    run: number;
+    runSession: number;
+    friend: number;
+    race: number;
+    territory: number;
+  };
 } = {
   users: new Map(),
   runs: [],
+  runSessions: [],
+  runSessionChunks: new Map(),
+  territoryContributions: new Map(),
+  runSessionTileStats: new Map(),
   friends: [],
   races: [],
   territories: [],
-  ids: { run: 1, friend: 1, race: 1, territory: 1 },
+  ids: { run: 1, runSession: 1, friend: 1, race: 1, territory: 1 },
 };
 
 const colorPalette = ['#3B82F6', '#22C55E', '#F97316', '#A855F7', '#14B8A6'];
@@ -103,6 +154,222 @@ const colorForUser = (id: string) => {
     hash |= 0;
   }
   return colorPalette[Math.abs(hash) % colorPalette.length];
+};
+
+const GRID_SIZE_METERS = 200;
+const METERS_PER_DEGREE_LAT = 111320;
+const MIN_SEGMENT_DISTANCE_METERS = 1;
+const MAX_POINT_ACCURACY_METERS = 80;
+const MAX_SEGMENT_SPEED_MPS = 12;
+const MAX_SEGMENT_DISTANCE_METERS = 450;
+const SEGMENT_ALLOCATION_STEP_METERS = 20;
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+const toNumber = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toTimestampMs = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const haversineDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+  const toRad = (num: number) => (num * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return 6371000 * c;
+};
+
+const latLngToGrid = (lat: number, lng: number) => {
+  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180);
+  const gridLat = Math.floor((lat * METERS_PER_DEGREE_LAT) / GRID_SIZE_METERS);
+  const gridLng = Math.floor((lng * metersPerDegreeLng) / GRID_SIZE_METERS);
+  return { gridLat, gridLng };
+};
+
+const normalizePoint = (point: any) => {
+  if (!point || typeof point !== 'object') return null;
+  const latitude = Number(point.latitude);
+  const longitude = Number(point.longitude);
+  const timestamp = toTimestampMs(point.timestamp);
+  const accuracy =
+    typeof point.accuracy === 'number' && Number.isFinite(point.accuracy)
+      ? Math.max(0, point.accuracy)
+      : null;
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return { latitude, longitude, timestamp, accuracy };
+};
+
+const normalizePoints = (points: unknown) => {
+  if (!Array.isArray(points)) return [];
+  const normalized = [];
+  for (const point of points) {
+    const parsed = normalizePoint(point);
+    if (parsed) normalized.push(parsed);
+  }
+  return normalized;
+};
+
+const tileKey = (gridLat: number, gridLng: number) => `${gridLat}:${gridLng}`;
+const sessionChunkKey = (runSessionId: number, seq: number) => `${runSessionId}:${seq}`;
+const contributionSubjectKey = (subjectType: string, subjectId: string) => `${subjectType}:${subjectId}`;
+const runSessionTileKey = (
+  runSessionId: number,
+  gridLat: number,
+  gridLng: number,
+  subjectType: string,
+  subjectId: string
+) => `${runSessionId}:${gridLat}:${gridLng}:${subjectType}:${subjectId}`;
+
+const resolveTopOwner = (
+  contributionMap: Map<string, number>,
+  currentOwnerId: string | null | undefined
+) => {
+  if (!contributionMap || contributionMap.size === 0) return null;
+
+  const sorted = Array.from(contributionMap.entries())
+    .map(([subjectKey, distance_m]) => ({
+      subject_id: subjectKey.split(':').slice(1).join(':'),
+      distance_m,
+    }))
+    .sort((a, b) => {
+      if (b.distance_m !== a.distance_m) {
+        return b.distance_m - a.distance_m;
+      }
+      return a.subject_id.localeCompare(b.subject_id);
+    });
+
+  if (sorted.length === 0) return null;
+
+  const maxDistance = sorted[0].distance_m;
+  const contenders = sorted
+    .filter((entry) => entry.distance_m === maxDistance)
+    .map((entry) => entry.subject_id);
+
+  let ownerId;
+  if (contenders.length === 1) {
+    ownerId = contenders[0];
+  } else if (currentOwnerId && contenders.includes(currentOwnerId)) {
+    ownerId = currentOwnerId;
+  } else {
+    ownerId = [...contenders].sort((a, b) => a.localeCompare(b))[0];
+  }
+
+  const ownerDistance = sorted.find((entry) => entry.subject_id === ownerId)?.distance_m ?? 0;
+  const secondDistance = sorted.find((entry) => entry.subject_id !== ownerId)?.distance_m ?? 0;
+  return {
+    owner_id: ownerId,
+    owner_distance_m: ownerDistance,
+    second_distance_m: secondDistance,
+    lead_m: Math.max(0, ownerDistance - secondDistance),
+  };
+};
+
+const allocateSegmentAcrossTiles = (
+  start: { latitude: number; longitude: number },
+  end: { latitude: number; longitude: number },
+  distanceMeters: number
+) => {
+  const steps = Math.max(1, Math.ceil(distanceMeters / SEGMENT_ALLOCATION_STEP_METERS));
+  const perStep = distanceMeters / steps;
+  const allocations = new Map<string, { grid_lat: number; grid_lng: number; distance_m: number }>();
+
+  for (let i = 0; i < steps; i += 1) {
+    const t1 = i / steps;
+    const t2 = (i + 1) / steps;
+    const mid = (t1 + t2) / 2;
+    const latitude = start.latitude + (end.latitude - start.latitude) * mid;
+    const longitude = start.longitude + (end.longitude - start.longitude) * mid;
+    const { gridLat, gridLng } = latLngToGrid(latitude, longitude);
+    const key = tileKey(gridLat, gridLng);
+    const existing = allocations.get(key);
+    if (existing) {
+      existing.distance_m += perStep;
+    } else {
+      allocations.set(key, { grid_lat: gridLat, grid_lng: gridLng, distance_m: perStep });
+    }
+  }
+
+  return allocations;
+};
+
+const upsertRunSessionTileStats = ({
+  runSessionId,
+  gridLat,
+  gridLng,
+  subjectType,
+  subjectId,
+  distanceMeters,
+  wasClaimed,
+  wasCaptured,
+  wasStrengthened,
+}: {
+  runSessionId: number;
+  gridLat: number;
+  gridLng: number;
+  subjectType: string;
+  subjectId: string;
+  distanceMeters: number;
+  wasClaimed: boolean;
+  wasCaptured: boolean;
+  wasStrengthened: boolean;
+}) => {
+  const key = runSessionTileKey(runSessionId, gridLat, gridLng, subjectType, subjectId);
+  const existing = state.runSessionTileStats.get(key);
+  if (existing) {
+    existing.distance_m += distanceMeters;
+    existing.was_claimed = existing.was_claimed || wasClaimed;
+    existing.was_captured = existing.was_captured || wasCaptured;
+    existing.was_strengthened = existing.was_strengthened || wasStrengthened;
+  } else {
+    state.runSessionTileStats.set(key, {
+      distance_m: distanceMeters,
+      was_claimed: wasClaimed,
+      was_captured: wasCaptured,
+      was_strengthened: wasStrengthened,
+    });
+  }
+};
+
+const recomputeRunSessionStats = (runSessionId: number, userId: string) => {
+  let territories_claimed = 0;
+  let territories_captured = 0;
+  let territories_strengthened = 0;
+
+  for (const [key, value] of Array.from(state.runSessionTileStats.entries())) {
+    const parts = key.split(':');
+    if (parts.length < 5) continue;
+    const sessionId = Number(parts[0]);
+    const subjectType = parts[3];
+    const subjectId = parts.slice(4).join(':');
+    if (sessionId !== runSessionId || subjectType !== 'user' || subjectId !== userId) {
+      continue;
+    }
+    if (value.was_claimed) territories_claimed += 1;
+    if (value.was_captured) territories_captured += 1;
+    if (value.was_strengthened) territories_strengthened += 1;
+  }
+
+  return { territories_claimed, territories_captured, territories_strengthened };
 };
 
 const getBody = (init?: RequestInit) => {
@@ -234,6 +501,431 @@ const handleRuns = (method: string, auth: AuthPayload, init?: RequestInit) => {
   }
 
   return jsonResponse({ error: 'Method Not Allowed' }, 405);
+};
+
+const applyDistanceToTile = ({
+  runSessionId,
+  user,
+  gridLat,
+  gridLng,
+  distanceMeters,
+  touchedAt,
+}: {
+  runSessionId: number;
+  user: LocalUser;
+  gridLat: number;
+  gridLng: number;
+  distanceMeters: number;
+  touchedAt: string;
+}) => {
+  const tileKeyValue = tileKey(gridLat, gridLng);
+  const contributionMap = state.territoryContributions.get(tileKeyValue) || new Map<string, number>();
+  const subjectKey = contributionSubjectKey('user', user.id);
+  contributionMap.set(subjectKey, (contributionMap.get(subjectKey) || 0) + distanceMeters);
+  state.territoryContributions.set(tileKeyValue, contributionMap);
+
+  const existingTerritory =
+    state.territories.find((tile) => tile.grid_lat === gridLat && tile.grid_lng === gridLng) || null;
+  const previousOwnerId = existingTerritory?.owner_id || null;
+  const previousStrength = existingTerritory?.strength ?? 1;
+  const ownership = resolveTopOwner(contributionMap, existingTerritory?.owner_id);
+  if (!ownership) {
+    return null;
+  }
+
+  const nextOwnerId = ownership.owner_id;
+  const nextOwner = state.users.get(nextOwnerId);
+  const nextOwnerUsername = nextOwner?.username || nextOwner?.name || 'Runner';
+  const nextStrength = clamp(Math.floor(ownership.lead_m / 50) + 1, 1, 10);
+
+  let wasClaimed = false;
+  let wasCaptured = false;
+  let wasStrengthened = false;
+
+  if (!existingTerritory) {
+    state.territories.push({
+      id: state.ids.territory++,
+      grid_lat: gridLat,
+      grid_lng: gridLng,
+      owner_id: nextOwnerId,
+      owner_username: nextOwnerUsername,
+      strength: nextStrength,
+      last_run_at: touchedAt,
+    });
+    if (nextOwner) {
+      nextOwner.territories_owned += 1;
+    }
+    wasClaimed = true;
+  } else if (existingTerritory.owner_id !== nextOwnerId) {
+    const previousOwner = state.users.get(existingTerritory.owner_id);
+    if (previousOwner) {
+      previousOwner.territories_owned = Math.max(0, previousOwner.territories_owned - 1);
+    }
+    if (nextOwner) {
+      nextOwner.territories_owned += 1;
+    }
+    existingTerritory.owner_id = nextOwnerId;
+    existingTerritory.owner_username = nextOwnerUsername;
+    existingTerritory.strength = nextStrength;
+    existingTerritory.last_run_at = touchedAt;
+    wasCaptured = true;
+  } else {
+    wasStrengthened = nextStrength > previousStrength;
+    existingTerritory.owner_username = nextOwnerUsername;
+    existingTerritory.strength = nextStrength;
+    existingTerritory.last_run_at = touchedAt;
+  }
+
+  upsertRunSessionTileStats({
+    runSessionId,
+    gridLat,
+    gridLng,
+    subjectType: 'user',
+    subjectId: user.id,
+    distanceMeters,
+    wasClaimed,
+    wasCaptured,
+    wasStrengthened,
+  });
+
+  const ownerChanged = !existingTerritory || previousOwnerId !== nextOwnerId;
+  const strengthChanged = !existingTerritory || previousStrength !== nextStrength;
+  if (!ownerChanged && !strengthChanged) {
+    return null;
+  }
+
+  return {
+    grid_lat: gridLat,
+    grid_lng: gridLng,
+    owner_id: nextOwnerId,
+    owner_username: nextOwnerUsername,
+    strength: nextStrength,
+    lead_m: Math.round(ownership.lead_m * 100) / 100,
+    last_run_at: touchedAt,
+  };
+};
+
+const processRunSessionChunk = ({
+  user,
+  runSessionId,
+  seq,
+  points,
+}: {
+  user: LocalUser;
+  runSessionId: number;
+  seq: number;
+  points: unknown;
+}) => {
+  const runSession = state.runSessions.find((session) => session.id === runSessionId);
+  if (!runSession || runSession.user_id !== user.id) {
+    return { error: 'Run session not found', status: 404 };
+  }
+  if (runSession.status !== 'active') {
+    return { error: 'Run session is not active', status: 409 };
+  }
+  if (!Number.isInteger(seq) || seq <= 0) {
+    return { error: 'seq must be a positive integer', status: 400 };
+  }
+
+  if (seq <= runSession.last_seq) {
+    const existingChunk = state.runSessionChunks.get(sessionChunkKey(runSessionId, seq));
+    if (existingChunk) {
+      return {
+        applied_segments: existingChunk.applied_segments,
+        rejected_segments: existingChunk.rejected_segments,
+        changed_tiles: existingChunk.changed_tiles,
+        live_stats: {
+          territories_claimed: runSession.territories_claimed,
+          territories_captured: runSession.territories_captured,
+          territories_strengthened: runSession.territories_strengthened,
+          total_segments_applied: runSession.total_segments_applied,
+          total_segments_rejected: runSession.total_segments_rejected,
+        },
+        duplicate: true,
+      };
+    }
+    return { error: 'Out-of-order chunk', status: 409, expected_seq: runSession.last_seq + 1 };
+  }
+
+  if (seq !== runSession.last_seq + 1) {
+    return { error: 'Out-of-order chunk', status: 409, expected_seq: runSession.last_seq + 1 };
+  }
+
+  const normalizedPoints = normalizePoints(points);
+  const tileDistanceMap = new Map<string, { grid_lat: number; grid_lng: number; distance_m: number }>();
+
+  let previousPoint = runSession.last_point;
+  let rejectedSegments = 0;
+  let appliedSegments = 0;
+
+  for (const point of normalizedPoints) {
+    if (point.accuracy !== null && point.accuracy > MAX_POINT_ACCURACY_METERS) {
+      rejectedSegments += 1;
+      continue;
+    }
+
+    if (!previousPoint) {
+      previousPoint = point;
+      continue;
+    }
+
+    if (point.timestamp <= previousPoint.timestamp) {
+      rejectedSegments += 1;
+      continue;
+    }
+
+    const segmentDistanceMeters = haversineDistanceMeters(
+      previousPoint.latitude,
+      previousPoint.longitude,
+      point.latitude,
+      point.longitude
+    );
+    const elapsedSeconds = (point.timestamp - previousPoint.timestamp) / 1000;
+
+    if (elapsedSeconds <= 0) {
+      rejectedSegments += 1;
+      continue;
+    }
+
+    const speedMps = segmentDistanceMeters / elapsedSeconds;
+    if (segmentDistanceMeters > MAX_SEGMENT_DISTANCE_METERS || speedMps > MAX_SEGMENT_SPEED_MPS) {
+      rejectedSegments += 1;
+      previousPoint = point;
+      continue;
+    }
+
+    if (segmentDistanceMeters < MIN_SEGMENT_DISTANCE_METERS) {
+      previousPoint = point;
+      continue;
+    }
+
+    const segmentAllocations = allocateSegmentAcrossTiles(previousPoint, point, segmentDistanceMeters);
+    for (const [key, allocation] of Array.from(segmentAllocations.entries())) {
+      const existing = tileDistanceMap.get(key);
+      if (existing) {
+        existing.distance_m += allocation.distance_m;
+      } else {
+        tileDistanceMap.set(key, { ...allocation });
+      }
+    }
+
+    appliedSegments += 1;
+    previousPoint = point;
+  }
+
+  const touchedAt = previousPoint
+    ? new Date(previousPoint.timestamp).toISOString()
+    : new Date().toISOString();
+  const changedTiles: Array<Record<string, unknown>> = [];
+
+  for (const allocation of Array.from(tileDistanceMap.values())) {
+    const changedTile = applyDistanceToTile({
+      runSessionId,
+      user,
+      gridLat: allocation.grid_lat,
+      gridLng: allocation.grid_lng,
+      distanceMeters: allocation.distance_m,
+      touchedAt,
+    });
+    if (changedTile) {
+      changedTiles.push(changedTile);
+    }
+  }
+
+  const stats = recomputeRunSessionStats(runSessionId, user.id);
+  runSession.last_seq = seq;
+  runSession.last_point = previousPoint;
+  runSession.territories_claimed = stats.territories_claimed;
+  runSession.territories_captured = stats.territories_captured;
+  runSession.territories_strengthened = stats.territories_strengthened;
+  runSession.total_segments_applied += appliedSegments;
+  runSession.total_segments_rejected += rejectedSegments;
+
+  state.runSessionChunks.set(sessionChunkKey(runSessionId, seq), {
+    point_count: normalizedPoints.length,
+    applied_segments: appliedSegments,
+    rejected_segments: rejectedSegments,
+    changed_tiles: changedTiles,
+  });
+
+  return {
+    applied_segments: appliedSegments,
+    rejected_segments: rejectedSegments,
+    changed_tiles: changedTiles,
+    live_stats: {
+      territories_claimed: runSession.territories_claimed,
+      territories_captured: runSession.territories_captured,
+      territories_strengthened: runSession.territories_strengthened,
+      total_segments_applied: runSession.total_segments_applied,
+      total_segments_rejected: runSession.total_segments_rejected,
+    },
+    duplicate: false,
+  };
+};
+
+const handleRunsLiveStart = (method: string, auth: AuthPayload, init?: RequestInit) => {
+  if (method !== 'POST') {
+    return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  }
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  const body = getBody(init);
+  const started_at =
+    typeof body.started_at === 'string' && body.started_at.trim().length > 0
+      ? body.started_at
+      : new Date().toISOString();
+
+  const runSession: LocalRunSession = {
+    id: state.ids.runSession++,
+    user_id: user.id,
+    status: 'active',
+    started_at,
+    ended_at: null,
+    last_seq: 0,
+    last_point: null,
+    territories_claimed: 0,
+    territories_captured: 0,
+    territories_strengthened: 0,
+    total_segments_applied: 0,
+    total_segments_rejected: 0,
+    run_id: null,
+  };
+  state.runSessions.push(runSession);
+  return jsonResponse({
+    run_session_id: runSession.id,
+    status: runSession.status,
+    started_at: runSession.started_at,
+  });
+};
+
+const handleRunsLiveChunk = (method: string, auth: AuthPayload, init?: RequestInit) => {
+  if (method !== 'POST') {
+    return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  }
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  const body = getBody(init);
+  const runSessionId = Number(body.run_session_id);
+  const seq = Number(body.seq);
+  if (!Number.isFinite(runSessionId) || runSessionId <= 0) {
+    return jsonResponse({ error: 'run_session_id is required' }, 400);
+  }
+
+  const result = processRunSessionChunk({
+    user,
+    runSessionId,
+    seq,
+    points: body.points,
+  });
+
+  if ('error' in result) {
+    return jsonResponse(
+      {
+        error: result.error,
+        ...(result.expected_seq ? { expected_seq: result.expected_seq } : {}),
+      },
+      result.status || 400
+    );
+  }
+
+  return jsonResponse({
+    applied_segments: result.applied_segments,
+    rejected_segments: result.rejected_segments,
+    changed_tiles: result.changed_tiles,
+    live_stats: result.live_stats,
+    duplicate: result.duplicate,
+  });
+};
+
+const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestInit) => {
+  if (method !== 'POST') {
+    return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  }
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  const body = getBody(init);
+  const runSessionId = Number(body.run_session_id);
+  if (!Number.isFinite(runSessionId) || runSessionId <= 0) {
+    return jsonResponse({ error: 'run_session_id is required' }, 400);
+  }
+
+  const runSession = state.runSessions.find((session) => session.id === runSessionId);
+  if (!runSession || runSession.user_id !== user.id) {
+    return jsonResponse({ error: 'Run session not found' }, 404);
+  }
+
+  if (runSession.status === 'finished') {
+    const run = runSession.run_id ? state.runs.find((entry) => entry.id === runSession.run_id) : null;
+    return jsonResponse({
+      run: run || null,
+      territory_summary: {
+        territories_claimed: runSession.territories_claimed,
+        territories_captured: runSession.territories_captured,
+        territories_strengthened: runSession.territories_strengthened,
+        total_segments_applied: runSession.total_segments_applied,
+        total_segments_rejected: runSession.total_segments_rejected,
+      },
+      duplicate: true,
+    });
+  }
+
+  const finalPoints = normalizePoints(body.final_points);
+  if (finalPoints.length > 0) {
+    const chunkResult = processRunSessionChunk({
+      user,
+      runSessionId,
+      seq: runSession.last_seq + 1,
+      points: finalPoints,
+    });
+    if ('error' in chunkResult) {
+      return jsonResponse({ error: chunkResult.error }, chunkResult.status || 400);
+    }
+  }
+
+  const finalDistanceKm = Math.max(0, toNumber(body.distance_km));
+  const finalDurationSeconds = Math.max(0, Math.floor(toNumber(body.duration_seconds)));
+  const finalAvgPace = Number.isFinite(Number(body.avg_pace)) ? Number(body.avg_pace) : null;
+
+  let run: LocalRun | null = null;
+  if (finalDistanceKm > 0.01) {
+    const now = new Date().toISOString();
+    run = {
+      id: state.ids.run++,
+      user_id: user.id,
+      distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+      duration_seconds: finalDurationSeconds,
+      avg_pace: finalAvgPace,
+      territories_claimed: runSession.territories_claimed,
+      started_at:
+        typeof body.started_at === 'string' && body.started_at.trim().length > 0
+          ? body.started_at
+          : runSession.started_at,
+      ended_at: now,
+      created_at: now,
+    };
+    state.runs.push(run);
+    user.total_distance_km += run.distance_km;
+    user.total_runs += 1;
+    runSession.run_id = run.id;
+  }
+
+  runSession.status = 'finished';
+  runSession.ended_at = new Date().toISOString();
+
+  return jsonResponse({
+    run,
+    territory_summary: {
+      territories_claimed: runSession.territories_claimed,
+      territories_captured: runSession.territories_captured,
+      territories_strengthened: runSession.territories_strengthened,
+      total_segments_applied: runSession.total_segments_applied,
+      total_segments_rejected: runSession.total_segments_rejected,
+    },
+    duplicate: false,
+  });
 };
 
 const handleFriends = (method: string, auth: AuthPayload, init?: RequestInit) => {
@@ -516,6 +1208,9 @@ export const handleLocalApiRequest = async ({
   const method = (init?.method || 'GET').toUpperCase();
   const path = parsed.pathname;
 
+  if (path === '/api/runs/live/start') return handleRunsLiveStart(method, auth, init);
+  if (path === '/api/runs/live/chunk') return handleRunsLiveChunk(method, auth, init);
+  if (path === '/api/runs/live/finish') return handleRunsLiveFinish(method, auth, init);
   if (path === '/api/profile') return handleProfile(method, auth, init);
   if (path === '/api/runs') return handleRuns(method, auth, init);
   if (path === '/api/friends') return handleFriends(method, auth, init);

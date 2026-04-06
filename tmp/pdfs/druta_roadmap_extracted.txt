@@ -1,0 +1,59 @@
+
+
+===== PAGE 1 =====
+Druta: Implementation Roadmap
+Phase 1: Minimum Viable Product (MVP)
+The MVP focuses on establishing the core real-time competitive loops (individual territory capture and live
+1v1 racing) and mitigating early user frustration regarding territory loss.
+Feature Area Description Acceptance Criteria (Goals)
+Simple User Simple sign-up and login mechanism (e.g., Users can successfully register, log in,
+Authentication Email, Google) to establish user identity. and maintain a unique profile.
+Individual Territory Users claim the grid based on GPS tracking of Successful real-time GPS tracking
+Capture their runs. Runs increase individual territory and territory assignment/strength
+strength. calculation. User can view personal
+claimed areas on the map.
+Simple Live 1v1 Racing Global challenge system where two users race Server-authoritative determination of
+simultaneously. A virtual track simulation race winner (distance or time-based).
+displays their avatars and real-time distance Low-latency synchronization for a
+gap. smooth competitive experience.
+Accumulated Territory Introduced to counter the 'exhausting' territory Display of permanent statistics:
+Stats recapturing mechanic by tracking overall Percentage of city covered,
+progress regardless of current holdings. Percentage of country covered, and
+initial milestone badges based on
+coverage achievements.
+Phase 2: Scale & Ecosystem Integration
+Phase 2 focuses on enhancing retention through social features and expanding accessibility via wearable
+integration.
+Feature Area Description Acceptance Criteria (Goals)
+Leaderboard & Implementation of a comprehensive global and Users can view rankings (e.g.,
+Community System localized Leaderboard. Introduction of a distance, wins, territory size). Users
+self-organizing Community system. can form, invite, and discover
+location-based communities.
+Automated Community A bot moderator will be implemented to Bot successfully detects and acts
+Moderation automatically enforce community guidelines. upon defined inappropriate content
+Founders are not required for day-to-day with minimal false positives.
+moderation.
+
+===== PAGE 2 =====
+Feature Area Description Acceptance Criteria (Goals)
+Garmin/Apple Watch Integration with major fitness wearables (Garmin Seamless run data sync (GPS,
+Integration and Apple Watch) to allow users to track runs distance, time) from watch to app,
+and capture territory without their mobile correctly calculating territory captured.
+phones.
+Phase 3: Group Strategy & Asynchronous Competition
+Phase 3 introduces advanced social/group dynamics and flexible race formats to cater to run clubs and
+different user schedules.
+Feature Area Description Acceptance Criteria (Goals)
+Clans and Group Territory Users can form 'Clans' (running groups) to Group ownership layer displayed on
+Conquest collaborate and contribute runs towards the map. Group members can view
+conquering larger territories collectively. total group strength and coordinate
+strategy.
+Community Chat & Implementing communication tools (chat and Dedicated in-app chat function for
+Planning planning features) within communities and clans clans and communities. Tools to plan
+to facilitate organized group runs and group activities (e.g., date, time,
+strategizing. location).
+Asynchronous Race / Introduction of non-real-time competitive races. System successfully records
+Challenge Feature One user sets a challenge (time or distance) challenger's run and notifies
+and the opponent has a defined window (e.g., opponent. System compares two
+24 hours) to complete the same challenge. asynchronous runs and declares a
+winner.

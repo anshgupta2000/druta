@@ -20,6 +20,38 @@ const HARD_REJECT_ACCURACY_METERS = 120;
 const HARD_REJECT_JUMP_METERS = 400;
 const FALLBACK_POLL_INTERVAL_MS = 3000;
 
+const LIVE_CHUNK_INTERVAL_MS = 5000;
+const LIVE_CHUNK_DISTANCE_METERS = 25;
+const LIVE_CHUNK_MAX_POINTS = 80;
+const LIVE_CHUNK_RETRY_BASE_MS = 1000;
+const LIVE_CHUNK_RETRY_MAX_MS = 15000;
+const LIVE_DRAIN_TIMEOUT_MS = 12000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizePointForLive = (point) => {
+  if (!point) return null;
+
+  const latitude = Number(point.latitude);
+  const longitude = Number(point.longitude);
+  const timestamp = Number(point.timestamp);
+  const accuracy =
+    typeof point.accuracy === "number" && Number.isFinite(point.accuracy)
+      ? point.accuracy
+      : null;
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+    timestamp,
+    accuracy,
+  };
+};
+
 export function useRunTracker() {
   const { signIn, auth } = useAuth();
   const queryClient = useQueryClient();
@@ -37,10 +69,20 @@ export function useRunTracker() {
   const locationSub = useRef(null);
   const timerRef = useRef(null);
   const pollRef = useRef(null);
+  const retryTimerRef = useRef(null);
+
   const lastProcessedPosition = useRef(null);
   const pendingDistanceMeters = useRef(0);
   const totalDistanceMeters = useRef(0);
   const speedWindowSamples = useRef([]);
+
+  const runSessionIdRef = useRef(null);
+  const chunkSeqRef = useRef(0);
+  const pendingLivePointsRef = useRef([]);
+  const inFlightChunkRef = useRef(null);
+  const chunkRetryCountRef = useRef(0);
+  const lastChunkSentAtRef = useRef(0);
+  const lastChunkDistanceMetersRef = useRef(0);
 
   useEffect(() => {
     if (!isRunning) {
@@ -59,6 +101,13 @@ export function useRunTracker() {
     };
   }, [isRunning]);
 
+  const clearLiveRetryTimer = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
   const stopTracking = useCallback(() => {
     if (locationSub.current) {
       locationSub.current.remove();
@@ -72,7 +121,214 @@ export function useRunTracker() {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
-  }, []);
+    clearLiveRetryTimer();
+  }, [clearLiveRetryTimer]);
+
+  const mergeChangedTilesIntoCache = useCallback(
+    (changedTiles) => {
+      if (!Array.isArray(changedTiles) || changedTiles.length === 0) {
+        return;
+      }
+
+      queryClient.setQueriesData({ queryKey: ["territories"] }, (current) => {
+        if (!current || !Array.isArray(current.territories)) {
+          return current;
+        }
+
+        const territoryMap = new Map(
+          current.territories.map((tile) => [`${tile.grid_lat}:${tile.grid_lng}`, tile]),
+        );
+
+        for (const tile of changedTiles) {
+          if (!tile) continue;
+          const key = `${tile.grid_lat}:${tile.grid_lng}`;
+          const existing = territoryMap.get(key);
+          territoryMap.set(key, {
+            ...(existing || {}),
+            ...tile,
+          });
+        }
+
+        return {
+          ...current,
+          territories: Array.from(territoryMap.values()),
+        };
+      });
+    },
+    [queryClient],
+  );
+
+  const scheduleLiveChunkRetry = useCallback(
+    (flushLiveChunk) => {
+      clearLiveRetryTimer();
+      chunkRetryCountRef.current += 1;
+      const retryDelay = Math.min(
+        LIVE_CHUNK_RETRY_BASE_MS * 2 ** (chunkRetryCountRef.current - 1),
+        LIVE_CHUNK_RETRY_MAX_MS,
+      );
+      retryTimerRef.current = setTimeout(() => {
+        flushLiveChunk({ force: true }).catch((error) => {
+          console.error("Retry live chunk error:", error);
+        });
+      }, retryDelay);
+    },
+    [clearLiveRetryTimer],
+  );
+
+  const flushLiveChunk = useCallback(
+    async ({ force = false } = {}) => {
+      if (!runSessionIdRef.current) {
+        return true;
+      }
+
+      if (inFlightChunkRef.current && !force) {
+        return false;
+      }
+
+      let payload = inFlightChunkRef.current;
+      if (!payload) {
+        const pendingPoints = pendingLivePointsRef.current;
+        if (pendingPoints.length === 0) {
+          return true;
+        }
+
+        const now = Date.now();
+        const distanceSinceLastChunk =
+          totalDistanceMeters.current - lastChunkDistanceMetersRef.current;
+        const shouldFlushByTime = now - lastChunkSentAtRef.current >= LIVE_CHUNK_INTERVAL_MS;
+        const shouldFlushByDistance = distanceSinceLastChunk >= LIVE_CHUNK_DISTANCE_METERS;
+
+        if (!force && !shouldFlushByTime && !shouldFlushByDistance) {
+          return false;
+        }
+
+        const pointsToSend = pendingPoints.slice(0, LIVE_CHUNK_MAX_POINTS);
+        payload = {
+          seq: chunkSeqRef.current + 1,
+          points: pointsToSend,
+        };
+        inFlightChunkRef.current = payload;
+      }
+
+      try {
+        const res = await fetch("/api/runs/live/chunk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_session_id: runSessionIdRef.current,
+            seq: payload.seq,
+            points: payload.points,
+          }),
+        });
+
+        if (!res.ok) {
+          let errorPayload = null;
+          try {
+            errorPayload = await res.json();
+          } catch {
+            errorPayload = null;
+          }
+
+          if (res.status === 409 && Number.isFinite(Number(errorPayload?.expected_seq))) {
+            const expectedSeq = Number(errorPayload.expected_seq);
+            if (expectedSeq === payload.seq + 1) {
+              pendingLivePointsRef.current.splice(0, payload.points.length);
+              chunkSeqRef.current = expectedSeq - 1;
+              inFlightChunkRef.current = null;
+              lastChunkSentAtRef.current = Date.now();
+              lastChunkDistanceMetersRef.current = totalDistanceMeters.current;
+              chunkRetryCountRef.current = 0;
+              clearLiveRetryTimer();
+              return true;
+            }
+
+            chunkSeqRef.current = Math.max(0, expectedSeq - 1);
+            inFlightChunkRef.current = null;
+          }
+
+          scheduleLiveChunkRetry(flushLiveChunk);
+          return false;
+        }
+
+        const data = await res.json();
+        mergeChangedTilesIntoCache(data?.changed_tiles || []);
+
+        pendingLivePointsRef.current.splice(0, payload.points.length);
+        chunkSeqRef.current = Math.max(chunkSeqRef.current, payload.seq);
+        inFlightChunkRef.current = null;
+        chunkRetryCountRef.current = 0;
+        clearLiveRetryTimer();
+        lastChunkSentAtRef.current = Date.now();
+        lastChunkDistanceMetersRef.current = totalDistanceMeters.current;
+
+        return true;
+      } catch (error) {
+        console.error("Live chunk upload error:", error);
+        scheduleLiveChunkRetry(flushLiveChunk);
+        return false;
+      }
+    },
+    [clearLiveRetryTimer, mergeChangedTilesIntoCache, scheduleLiveChunkRetry],
+  );
+
+  const queueLivePoint = useCallback(
+    (point) => {
+      const normalized = normalizePointForLive(point);
+      if (!normalized || !runSessionIdRef.current) {
+        return;
+      }
+
+      const pending = pendingLivePointsRef.current;
+      const lastPending = pending[pending.length - 1];
+      if (
+        lastPending &&
+        lastPending.timestamp === normalized.timestamp &&
+        lastPending.latitude === normalized.latitude &&
+        lastPending.longitude === normalized.longitude
+      ) {
+        return;
+      }
+
+      pending.push(normalized);
+
+      flushLiveChunk({ force: false }).catch((error) => {
+        console.error("Auto flush live chunk error:", error);
+      });
+    },
+    [flushLiveChunk],
+  );
+
+  const drainLiveChunks = useCallback(async () => {
+    if (!runSessionIdRef.current) {
+      return true;
+    }
+
+    const deadline = Date.now() + LIVE_DRAIN_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const hasPending =
+        pendingLivePointsRef.current.length > 0 || Boolean(inFlightChunkRef.current);
+      if (!hasPending) {
+        return true;
+      }
+
+      await flushLiveChunk({ force: true });
+      await sleep(250);
+    }
+
+    return false;
+  }, [flushLiveChunk]);
+
+  const resetLiveSessionRefs = useCallback(() => {
+    clearLiveRetryTimer();
+    runSessionIdRef.current = null;
+    chunkSeqRef.current = 0;
+    pendingLivePointsRef.current = [];
+    inFlightChunkRef.current = null;
+    chunkRetryCountRef.current = 0;
+    lastChunkSentAtRef.current = 0;
+    lastChunkDistanceMetersRef.current = 0;
+  }, [clearLiveRetryTimer]);
 
   const updateLiveSpeed = useCallback((timestampMs) => {
     if (!Number.isFinite(timestampMs)) {
@@ -161,6 +417,7 @@ export function useRunTracker() {
         }
         lastProcessedPosition.current = sample;
         setPositions([sample]);
+        queueLivePoint(sample);
         setGpsStatus("ready");
         updateLiveSpeed(timestamp);
         return;
@@ -223,6 +480,7 @@ export function useRunTracker() {
       );
       pendingDistanceMeters.current += creditedDistanceMeters;
       lastProcessedPosition.current = sample;
+      queueLivePoint(sample);
 
       if (pendingDistanceMeters.current < DISTANCE_COMMIT_THRESHOLD_METERS) {
         setGpsStatus("tracking");
@@ -237,7 +495,7 @@ export function useRunTracker() {
       setGpsStatus("tracking");
       updateLiveSpeed(timestamp);
     },
-    [updateLiveSpeed],
+    [queueLivePoint, updateLiveSpeed],
   );
 
   const startRun = useCallback(async () => {
@@ -271,11 +529,13 @@ export function useRunTracker() {
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
+    const startedAt = new Date().toISOString();
+
     setIsRunning(true);
     setDistance(0);
     setDuration(0);
     setPositions([]);
-    setStartTime(new Date().toISOString());
+    setStartTime(startedAt);
     setGpsStatus("acquiring");
     setCurrentAccuracy(null);
     setLiveSpeedMps(0);
@@ -284,6 +544,21 @@ export function useRunTracker() {
     pendingDistanceMeters.current = 0;
     totalDistanceMeters.current = 0;
     speedWindowSamples.current = [];
+    resetLiveSessionRefs();
+
+    try {
+      const liveStartRes = await fetch("/api/runs/live/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ started_at: startedAt }),
+      });
+      if (liveStartRes.ok) {
+        const liveSession = await liveStartRes.json();
+        runSessionIdRef.current = liveSession?.run_session_id || null;
+      }
+    } catch (error) {
+      console.error("Live run start error:", error);
+    }
 
     try {
       const initial = await Location.getCurrentPositionAsync({
@@ -329,7 +604,7 @@ export function useRunTracker() {
         console.error("Fallback location poll error:", err);
       }
     }, FALLBACK_POLL_INTERVAL_MS);
-  }, [acceptLocationSample, auth, signIn]);
+  }, [acceptLocationSample, auth, resetLiveSessionRefs, signIn]);
 
   const stopRun = useCallback(async () => {
     if (!isRunning) {
@@ -356,6 +631,43 @@ export function useRunTracker() {
         ? (finalDistanceKm * 1000) / duration
         : 0;
 
+    const hasLiveSession = Boolean(runSessionIdRef.current);
+
+    if (hasLiveSession) {
+      await drainLiveChunks();
+
+      try {
+        const finalPoints = inFlightChunkRef.current
+          ? []
+          : pendingLivePointsRef.current.slice();
+        const finishRes = await fetch("/api/runs/live/finish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_session_id: runSessionIdRef.current,
+            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+            duration_seconds: duration,
+            avg_pace: finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
+            started_at: startTime,
+            final_points: finalPoints,
+          }),
+        });
+
+        if (!finishRes.ok) {
+          throw new Error(`finish failed: ${finishRes.status}`);
+        }
+
+        resetLiveSessionRefs();
+        queryClient.invalidateQueries({ queryKey: ["runs"] });
+        queryClient.invalidateQueries({ queryKey: ["profile"] });
+        queryClient.invalidateQueries({ queryKey: ["territories"] });
+        queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+        return;
+      } catch (error) {
+        console.error("Live run finish error:", error);
+      }
+    }
+
     if (finalDistanceKm > 0.01) {
       try {
         const routeData = positions.length > 0 ? JSON.stringify(positions) : null;
@@ -377,13 +689,25 @@ export function useRunTracker() {
         console.error("Save run error:", err);
       }
     }
-  }, [duration, isRunning, positions, queryClient, startTime, stopTracking]);
+
+    resetLiveSessionRefs();
+  }, [
+    drainLiveChunks,
+    duration,
+    isRunning,
+    positions,
+    queryClient,
+    resetLiveSessionRefs,
+    startTime,
+    stopTracking,
+  ]);
 
   useEffect(() => {
     return () => {
       stopTracking();
+      resetLiveSessionRefs();
     };
-  }, [stopTracking]);
+  }, [resetLiveSessionRefs, stopTracking]);
 
   const paceDisplay = useMemo(() => {
     if (distance <= 0 || duration <= 0) {
