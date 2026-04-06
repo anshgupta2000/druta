@@ -101,6 +101,11 @@ export default function ProfileScreen() {
   const friends = friendsData?.friends || [];
   const pendingRequests = friendsData?.pending || [];
 
+  const preferredName = (profile?.name || user?.name || "").trim();
+  const displayName = preferredName || profile?.username || "Runner";
+  const displayHandle = profile?.username ? `@${profile.username}` : null;
+  const profileInitial = (displayName || "?")[0].toUpperCase();
+
   const fallbackCoreStats = useMemo(() => {
     const totalClaimed = runs.reduce(
       (sum, run) => sum + Number(run.territories_claimed || 0),
@@ -379,10 +384,7 @@ export default function ProfileScreen() {
                   color: COLORS.black,
                 }}
               >
-                {(profile?.username ||
-                  profile?.name ||
-                  user?.name ||
-                  "?")[0].toUpperCase()}
+                {profileInitial}
               </Text>
             )}
           </View>
@@ -425,33 +427,56 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity
-              onPress={() => {
-                setNewUsername(profile?.username || "");
-                setShowEditUsername(true);
-              }}
+            <View
               style={{
-                flexDirection: "row",
                 alignItems: "center",
                 marginTop: 16,
+                width: "100%",
               }}
             >
               <Text
+                numberOfLines={1}
                 style={{
                   color: COLORS.white,
-                  fontSize: 22,
+                  fontSize: 30,
                   fontWeight: "800",
-                  letterSpacing: -0.5,
+                  letterSpacing: -1,
+                  maxWidth: "100%",
+                  textAlign: "center",
                 }}
               >
-                {profile?.username || "Set Username"}
+                {displayName}
               </Text>
-              <Settings
-                size={14}
-                color={COLORS.textTertiary}
-                style={{ marginLeft: 8 }}
-              />
-            </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setNewUsername(profile?.username || "");
+                  setShowEditUsername(true);
+                }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginTop: 6,
+                  backgroundColor: COLORS.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  gap: 6,
+                }}
+              >
+                <Text
+                  style={{
+                    color: COLORS.textSecondary,
+                    fontSize: 12,
+                    fontWeight: "600",
+                  }}
+                >
+                  {displayHandle || "Set Username"}
+                </Text>
+                <Settings size={13} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            </View>
           )}
           <Text
             style={{
@@ -981,9 +1006,7 @@ export default function ProfileScreen() {
                               color: COLORS.black,
                             }}
                           >
-                            {(profile?.username ||
-                              profile?.name ||
-                              "?")[0].toUpperCase()}
+                            {profileInitial}
                           </Text>
                         </View>
                         <Text

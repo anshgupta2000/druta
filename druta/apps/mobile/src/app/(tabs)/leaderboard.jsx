@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -11,14 +11,75 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { Trophy, Map, Zap, Medal, Crown } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { LinearGradient } from "expo-linear-gradient";
 import { COLORS } from "@/constants/theme";
 import useUser from "@/utils/auth/useUser";
 
-const TABS = [
-  { key: "territories", label: "Zones", icon: Map },
-  { key: "distance", label: "Distance", icon: Zap },
-  { key: "wins", label: "Wins", icon: Trophy },
-];
+const TAB_META = {
+  territories: {
+    key: "territories",
+    label: "Zones",
+    unit: "zones",
+    accent: COLORS.accent,
+    glow: "rgba(45,122,255,0.26)",
+    borderGlow: "rgba(45,122,255,0.32)",
+    rowTint: "rgba(45,122,255,0.12)",
+    description: "Own more tiles to climb.",
+    icon: Map,
+    getValue: (item) => Number(item?.territories_owned || 0),
+  },
+  distance: {
+    key: "distance",
+    label: "Distance",
+    unit: "km",
+    accent: COLORS.cyan,
+    glow: "rgba(0,212,255,0.24)",
+    borderGlow: "rgba(0,212,255,0.32)",
+    rowTint: "rgba(0,212,255,0.1)",
+    description: "Weekly mileage leaders.",
+    icon: Zap,
+    getValue: (item) => Number(item?.total_distance_km || 0),
+  },
+  wins: {
+    key: "wins",
+    label: "Wins",
+    unit: "wins",
+    accent: COLORS.orange,
+    glow: "rgba(255,107,53,0.24)",
+    borderGlow: "rgba(255,107,53,0.32)",
+    rowTint: "rgba(255,107,53,0.1)",
+    description: "Head-to-head dominance.",
+    icon: Trophy,
+    getValue: (item) => Number(item?.wins || 0),
+  },
+};
+
+const TABS = Object.values(TAB_META);
+const PODIUM_ORDER = [1, 0, 2];
+
+const getDisplayName = (item) => {
+  const name = (item?.name || "").trim();
+  if (name.length > 0) return name;
+  const username = (item?.username || "").trim();
+  if (username.length > 0) return username;
+  return "Runner";
+};
+
+const getHandle = (item) => {
+  const username = (item?.username || "").trim();
+  if (!username) return null;
+  const name = (item?.name || "").trim();
+  if (name && name.toLowerCase() === username.toLowerCase()) return null;
+  return `@${username}`;
+};
+
+const getInitial = (item) => getDisplayName(item)[0].toUpperCase();
+
+const getMedalColor = (rank) => {
+  if (rank === 1) return "#FFD700";
+  if (rank === 2) return "#C0C0C0";
+  return "#CD7F32";
+};
 
 export default function LeaderboardScreen() {
   const insets = useSafeAreaInsets();
@@ -35,31 +96,31 @@ export default function LeaderboardScreen() {
   });
 
   const leaderboard = data?.leaderboard || [];
+  const activeMeta = TAB_META[activeTab] || TAB_META.territories;
 
-  const getStatValue = (item) => {
-    if (activeTab === "territories") return `${item.territories_owned || 0}`;
-    if (activeTab === "distance")
-      return `${(item.total_distance_km || 0).toFixed(1)}`;
-    return `${item.wins || 0}`;
+  const myRank = useMemo(() => {
+    if (!user?.id) return null;
+    const index = leaderboard.findIndex((entry) => entry.id === user.id);
+    return index >= 0 ? index + 1 : null;
+  }, [leaderboard, user?.id]);
+
+  const myEntry = myRank ? leaderboard[myRank - 1] : null;
+
+  const formatStatValue = (item) => {
+    const value = activeMeta.getValue(item);
+    if (activeTab === "distance") return value.toFixed(1);
+    return String(Math.round(value));
   };
 
-  const getStatUnit = () => {
-    if (activeTab === "territories") return "zones";
-    if (activeTab === "distance") return "km";
-    return "wins";
-  };
-
-  const getMedalColor = (index) => {
-    if (index === 0) return "#FFD700";
-    if (index === 1) return "#C0C0C0";
-    if (index === 2) return "#CD7F32";
-    return COLORS.textTertiary;
-  };
+  const podiumSlots = PODIUM_ORDER.map((index) => ({
+    item: leaderboard[index] || null,
+    rank: index + 1,
+  }));
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <StatusBar style="light" />
-      <View style={{ paddingTop: insets.top + 20, paddingHorizontal: 24 }}>
+      <View style={{ paddingTop: insets.top + 16, paddingHorizontal: 24 }}>
         <Text
           style={{
             fontSize: 12,
@@ -72,23 +133,107 @@ export default function LeaderboardScreen() {
         </Text>
         <Text
           style={{
-            fontSize: 30,
+            fontSize: 42,
             fontWeight: "800",
             color: COLORS.white,
-            marginTop: 4,
-            letterSpacing: -1,
+            marginTop: 6,
+            letterSpacing: -1.4,
+            lineHeight: 46,
           }}
         >
           Leaderboard
         </Text>
       </View>
 
-      {/* Tabs */}
+      <View style={{ paddingHorizontal: 24, marginTop: 16 }}>
+        <LinearGradient
+          colors={[activeMeta.glow, "rgba(12,12,14,0.95)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: activeMeta.borderGlow,
+            padding: 14,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <View>
+              <Text
+                style={{
+                  color: COLORS.textSecondary,
+                  fontSize: 10,
+                  fontWeight: "700",
+                  letterSpacing: 1.1,
+                }}
+              >
+                {activeMeta.label.toUpperCase()} LEAGUE
+              </Text>
+              <Text
+                style={{
+                  color: COLORS.white,
+                  fontSize: 16,
+                  fontWeight: "700",
+                  marginTop: 4,
+                }}
+              >
+                {activeMeta.description}
+              </Text>
+            </View>
+
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: "rgba(0,0,0,0.32)",
+                borderWidth: 1,
+                borderColor: COLORS.border,
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+              }}
+            >
+              <Medal size={14} color={activeMeta.accent} />
+              <Text
+                style={{
+                  color: COLORS.white,
+                  fontSize: 12,
+                  fontWeight: "700",
+                }}
+              >
+                {myRank ? `#${myRank}` : "Unranked"}
+              </Text>
+            </View>
+          </View>
+
+          {myEntry && (
+            <Text
+              numberOfLines={1}
+              style={{
+                marginTop: 10,
+                color: COLORS.textSecondary,
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              You have {formatStatValue(myEntry)} {activeMeta.unit}
+            </Text>
+          )}
+        </LinearGradient>
+      </View>
+
       <View
         style={{
           flexDirection: "row",
+          marginTop: 16,
           paddingHorizontal: 24,
-          marginTop: 24,
           gap: 8,
         }}
       >
@@ -99,313 +244,394 @@ export default function LeaderboardScreen() {
             <TouchableOpacity
               key={tab.key}
               onPress={() => setActiveTab(tab.key)}
-              style={{
-                flex: 1,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingVertical: 12,
-                borderRadius: 14,
-                gap: 6,
-                backgroundColor: isActive ? COLORS.accent : COLORS.surface,
-                borderWidth: 1,
-                borderColor: isActive ? COLORS.accent : COLORS.border,
-              }}
+              style={{ flex: 1 }}
             >
-              <IconComp
-                size={15}
-                color={isActive ? COLORS.black : COLORS.textSecondary}
-              />
-              <Text
-                style={{
-                  fontSize: 12,
-                  fontWeight: "700",
-                  color: isActive ? COLORS.black : COLORS.textSecondary,
-                }}
-              >
-                {tab.label}
-              </Text>
+              {isActive ? (
+                <LinearGradient
+                  colors={[tab.glow, "rgba(12,12,14,0.96)"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={{
+                    borderRadius: 14,
+                    paddingVertical: 12,
+                    borderWidth: 1,
+                    borderColor: tab.borderGlow,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                >
+                  <IconComp size={15} color={tab.accent} />
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: COLORS.white,
+                    }}
+                  >
+                    {tab.label}
+                  </Text>
+                </LinearGradient>
+              ) : (
+                <View
+                  style={{
+                    borderRadius: 14,
+                    paddingVertical: 12,
+                    borderWidth: 1,
+                    borderColor: COLORS.border,
+                    backgroundColor: COLORS.surface,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                >
+                  <IconComp size={15} color={COLORS.textSecondary} />
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: COLORS.textSecondary,
+                    }}
+                  >
+                    {tab.label}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           );
         })}
       </View>
 
       <ScrollView
-        style={{ flex: 1, marginTop: 20 }}
-        contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
+        style={{ flex: 1, marginTop: 18 }}
+        contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
       >
         {isLoading && (
           <View style={{ alignItems: "center", marginTop: 48 }}>
-            <ActivityIndicator color={COLORS.accent} size="large" />
+            <ActivityIndicator color={activeMeta.accent} size="large" />
           </View>
         )}
 
-        {/* Top 3 podium */}
         {!isLoading && leaderboard.length > 0 && (
           <View
             style={{
               flexDirection: "row",
-              justifyContent: "center",
               alignItems: "flex-end",
-              marginBottom: 28,
-              gap: 8,
+              justifyContent: "center",
+              gap: 10,
+              marginBottom: 24,
             }}
           >
-            {[1, 0, 2].map((rank) => {
-              const item = leaderboard[rank];
-              if (!item) return <View key={rank} style={{ flex: 1 }} />;
+            {podiumSlots.map(({ item, rank }, slotIndex) => {
+              if (!item) {
+                return <View key={`empty-${rank}`} style={{ flex: 1 }} />;
+              }
+
+              const isChampion = rank === 1;
               const isMe = item.id === user?.id;
-              const isFirst = rank === 0;
-              const height = isFirst ? 120 : rank === 1 ? 96 : 80;
+              const avatarSize = isChampion ? 68 : 56;
 
               return (
                 <Animated.View
                   key={item.id}
-                  entering={FadeInDown.delay(rank * 100).duration(400)}
-                  style={{ flex: 1, alignItems: "center" }}
+                  entering={FadeInDown.delay(slotIndex * 90).duration(360)}
+                  style={{ flex: isChampion ? 1.15 : 1, alignItems: "center" }}
                 >
-                  <View
-                    style={{
-                      width: isFirst ? 56 : 48,
-                      height: isFirst ? 56 : 48,
-                      borderRadius: isFirst ? 28 : 24,
-                      backgroundColor: item.avatar_color || COLORS.accent,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: 8,
-                      borderWidth: 2,
-                      borderColor: getMedalColor(rank),
-                      shadowColor: getMedalColor(rank),
-                      shadowOffset: { width: 0, height: 0 },
-                      shadowOpacity: isFirst ? 0.5 : 0.3,
-                      shadowRadius: isFirst ? 12 : 8,
-                    }}
-                  >
-                    <Text
+                  <View style={{ alignItems: "center", marginBottom: 10 }}>
+                    <View
                       style={{
-                        fontSize: isFirst ? 20 : 16,
-                        fontWeight: "800",
-                        color: COLORS.black,
+                        width: avatarSize,
+                        height: avatarSize,
+                        borderRadius: avatarSize / 2,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: item.avatar_color || activeMeta.accent,
+                        borderWidth: 2.5,
+                        borderColor: getMedalColor(rank),
+                        shadowColor: getMedalColor(rank),
+                        shadowOffset: { width: 0, height: 0 },
+                        shadowOpacity: isChampion ? 0.45 : 0.25,
+                        shadowRadius: isChampion ? 14 : 8,
                       }}
                     >
-                      {(item.username || item.name || "?")[0].toUpperCase()}
+                      <Text
+                        style={{
+                          color: COLORS.black,
+                          fontSize: isChampion ? 28 : 22,
+                          fontWeight: "900",
+                        }}
+                      >
+                        {getInitial(item)}
+                      </Text>
+                    </View>
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        color: isMe ? activeMeta.accent : COLORS.white,
+                        fontSize: 14,
+                        fontWeight: "700",
+                        marginTop: 8,
+                        maxWidth: 96,
+                        textAlign: "center",
+                      }}
+                    >
+                      {getDisplayName(item)}
                     </Text>
                   </View>
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      color: isMe ? COLORS.accent : COLORS.white,
-                      fontSize: 12,
-                      fontWeight: "700",
-                      marginBottom: 4,
-                      maxWidth: 80,
-                      textAlign: "center",
-                    }}
-                  >
-                    {item.username || item.name || "Runner"}
-                  </Text>
-                  <View
+
+                  <LinearGradient
+                    colors={
+                      isChampion
+                        ? [activeMeta.glow, "rgba(12,12,14,0.95)"]
+                        : ["rgba(255,255,255,0.03)", "rgba(12,12,14,0.95)"]
+                    }
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
                     style={{
                       width: "100%",
-                      height: height,
-                      borderRadius: 16,
-                      backgroundColor: COLORS.surface,
+                      borderRadius: 18,
                       borderWidth: 1,
-                      borderColor: COLORS.border,
+                      borderColor: isChampion
+                        ? activeMeta.borderGlow
+                        : COLORS.border,
+                      paddingTop: 14,
+                      paddingBottom: 12,
                       alignItems: "center",
-                      justifyContent: "center",
+                      minHeight: isChampion ? 124 : 104,
                     }}
                   >
-                    {isFirst && (
-                      <Crown
-                        size={18}
-                        color={getMedalColor(0)}
-                        style={{ marginBottom: 4 }}
-                      />
-                    )}
-                    <Text
-                      style={{
-                        fontSize: isFirst ? 28 : 22,
-                        fontWeight: "800",
-                        color: COLORS.white,
-                      }}
-                    >
-                      {getStatValue(item)}
-                    </Text>
-                    <Text
-                      style={{
-                        color: COLORS.textTertiary,
-                        fontSize: 10,
-                        fontWeight: "600",
-                        marginTop: 2,
-                        letterSpacing: 0.5,
-                      }}
-                    >
-                      {getStatUnit()}
-                    </Text>
                     <View
                       style={{
                         position: "absolute",
-                        top: -8,
+                        top: -11,
+                        width: 28,
+                        height: 28,
+                        borderRadius: 14,
                         backgroundColor: getMedalColor(rank),
-                        width: 22,
-                        height: 22,
-                        borderRadius: 11,
                         alignItems: "center",
                         justifyContent: "center",
                       }}
                     >
                       <Text
                         style={{
-                          fontSize: 11,
-                          fontWeight: "800",
                           color: COLORS.black,
+                          fontSize: 12,
+                          fontWeight: "900",
                         }}
                       >
-                        {rank + 1}
+                        {rank}
                       </Text>
                     </View>
-                  </View>
+
+                    {isChampion && (
+                      <Crown
+                        size={16}
+                        color={getMedalColor(1)}
+                        style={{ marginBottom: 4 }}
+                      />
+                    )}
+                    <Text
+                      style={{
+                        color: COLORS.white,
+                        fontSize: isChampion ? 34 : 26,
+                        fontWeight: "800",
+                        letterSpacing: -1,
+                      }}
+                    >
+                      {formatStatValue(item)}
+                    </Text>
+                    <Text
+                      style={{
+                        color: COLORS.textTertiary,
+                        fontSize: 11,
+                        fontWeight: "600",
+                        marginTop: 2,
+                        letterSpacing: 0.6,
+                      }}
+                    >
+                      {activeMeta.unit}
+                    </Text>
+                  </LinearGradient>
                 </Animated.View>
               );
             })}
           </View>
         )}
 
-        {/* Rest of leaderboard */}
+        {!isLoading && leaderboard.length > 3 && (
+          <Text
+            style={{
+              color: COLORS.textSecondary,
+              fontSize: 11,
+              fontWeight: "700",
+              letterSpacing: 1.2,
+              marginBottom: 10,
+            }}
+          >
+            ALL RUNNERS
+          </Text>
+        )}
+
         {leaderboard.slice(3).map((item, index) => {
           const isMe = item.id === user?.id;
           const rank = index + 4;
+          const handle = getHandle(item);
+
           return (
             <Animated.View
               key={item.id}
-              entering={FadeInDown.delay((index + 3) * 40).duration(300)}
-              style={{
-                backgroundColor: isMe ? COLORS.accentMuted : COLORS.surface,
-                borderRadius: 16,
-                padding: 16,
-                marginBottom: 8,
-                borderWidth: 1,
-                borderColor: isMe ? COLORS.borderAccent : COLORS.border,
-                flexDirection: "row",
-                alignItems: "center",
-              }}
+              entering={FadeInDown.delay((index + 3) * 30).duration(280)}
+              style={{ marginBottom: 8 }}
             >
               <View
                 style={{
-                  width: 32,
-                  height: 32,
                   borderRadius: 16,
+                  padding: 14,
+                  borderWidth: 1,
+                  borderColor: isMe ? activeMeta.borderGlow : COLORS.border,
+                  backgroundColor: isMe ? activeMeta.rowTint : COLORS.surface,
+                  flexDirection: "row",
                   alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: COLORS.surfaceElevated,
+                  gap: 10,
                 }}
               >
-                <Text
+                <View
                   style={{
-                    color: COLORS.textTertiary,
-                    fontSize: 13,
-                    fontWeight: "700",
+                    width: 34,
+                    height: 34,
+                    borderRadius: 17,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: COLORS.surfaceElevated,
                   }}
                 >
-                  {rank}
-                </Text>
-              </View>
+                  <Text
+                    style={{
+                      color: COLORS.textTertiary,
+                      fontSize: 13,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {rank}
+                  </Text>
+                </View>
 
-              <View
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 20,
-                  marginLeft: 10,
-                  backgroundColor: item.avatar_color || COLORS.accent,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Text
+                <View
                   style={{
-                    fontSize: 15,
-                    fontWeight: "800",
-                    color: COLORS.black,
+                    width: 42,
+                    height: 42,
+                    borderRadius: 21,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: item.avatar_color || activeMeta.accent,
                   }}
                 >
-                  {(item.username || item.name || "?")[0].toUpperCase()}
-                </Text>
-              </View>
+                  <Text
+                    style={{
+                      color: COLORS.black,
+                      fontSize: 17,
+                      fontWeight: "900",
+                    }}
+                  >
+                    {getInitial(item)}
+                  </Text>
+                </View>
 
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text
-                  style={{
-                    color: isMe ? COLORS.accent : COLORS.white,
-                    fontSize: 14,
-                    fontWeight: "700",
-                  }}
-                >
-                  {item.username || item.name || "Runner"}
-                  {isMe ? " (You)" : ""}
-                </Text>
-                <Text
-                  style={{
-                    color: COLORS.textTertiary,
-                    fontSize: 11,
-                    marginTop: 2,
-                  }}
-                >
-                  {item.total_runs || 0} runs · {item.wins || 0}W{" "}
-                  {item.losses || 0}L
-                </Text>
-              </View>
+                <View style={{ flex: 1 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: isMe ? activeMeta.accent : COLORS.white,
+                      fontSize: 17,
+                      fontWeight: "700",
+                      letterSpacing: -0.2,
+                    }}
+                  >
+                    {getDisplayName(item)}
+                    {isMe ? " (You)" : ""}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: COLORS.textSecondary,
+                      fontSize: 11,
+                      marginTop: 2,
+                    }}
+                  >
+                    {handle ? `${handle}  •  ` : ""}
+                    {item.total_runs || 0} runs · {item.wins || 0}W{" "}
+                    {item.losses || 0}L
+                  </Text>
+                </View>
 
-              <View style={{ alignItems: "flex-end" }}>
-                <Text
-                  style={{
-                    color: COLORS.white,
-                    fontSize: 16,
-                    fontWeight: "800",
-                  }}
-                >
-                  {getStatValue(item)}
-                </Text>
-                <Text
-                  style={{
-                    color: COLORS.textTertiary,
-                    fontSize: 10,
-                    marginTop: 2,
-                  }}
-                >
-                  {getStatUnit()}
-                </Text>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text
+                    style={{
+                      color: COLORS.white,
+                      fontSize: 20,
+                      fontWeight: "800",
+                      letterSpacing: -0.4,
+                    }}
+                  >
+                    {formatStatValue(item)}
+                  </Text>
+                  <Text
+                    style={{
+                      color: COLORS.textTertiary,
+                      fontSize: 10,
+                      fontWeight: "600",
+                      marginTop: 2,
+                      letterSpacing: 0.6,
+                    }}
+                  >
+                    {activeMeta.unit}
+                  </Text>
+                </View>
               </View>
             </Animated.View>
           );
         })}
 
         {!isLoading && leaderboard.length === 0 && (
-          <View style={{ alignItems: "center", marginTop: 64 }}>
-            <Trophy size={52} color={COLORS.textDisabled} />
-            <Text
+          <View style={{ alignItems: "center", marginTop: 60 }}>
+            <LinearGradient
+              colors={["rgba(45,122,255,0.12)", "rgba(12,12,14,0.98)"]}
               style={{
-                color: COLORS.textSecondary,
-                fontSize: 17,
-                fontWeight: "700",
-                marginTop: 20,
+                width: "100%",
+                borderRadius: 20,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+                paddingVertical: 32,
+                alignItems: "center",
               }}
             >
-              No runners yet
-            </Text>
-            <Text
-              style={{
-                color: COLORS.textTertiary,
-                fontSize: 13,
-                marginTop: 6,
-                textAlign: "center",
-                lineHeight: 20,
-              }}
-            >
-              Be the first to claim territory{"\n"}and top the leaderboard.
-            </Text>
+              <Trophy size={46} color={COLORS.textDisabled} />
+              <Text
+                style={{
+                  color: COLORS.white,
+                  fontSize: 18,
+                  fontWeight: "700",
+                  marginTop: 14,
+                }}
+              >
+                No runners yet
+              </Text>
+              <Text
+                style={{
+                  color: COLORS.textTertiary,
+                  fontSize: 13,
+                  marginTop: 6,
+                  textAlign: "center",
+                  lineHeight: 20,
+                  paddingHorizontal: 24,
+                }}
+              >
+                Be the first to claim territory and set the pace.
+              </Text>
+            </LinearGradient>
           </View>
         )}
       </ScrollView>
