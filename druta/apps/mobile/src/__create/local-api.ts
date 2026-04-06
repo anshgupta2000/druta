@@ -436,6 +436,74 @@ const listLeaderboard = (sortBy: string) => {
   return users.slice(0, 50);
 };
 
+const getLeaderboardRank = (userId: string) => {
+  const users = Array.from(state.users.values());
+  users.sort((a, b) => {
+    if (b.territories_owned !== a.territories_owned) {
+      return b.territories_owned - a.territories_owned;
+    }
+    return a.id.localeCompare(b.id);
+  });
+  const index = users.findIndex((entry) => entry.id === userId);
+  return index >= 0 ? index + 1 : null;
+};
+
+const runTimestamp = (run: Pick<LocalRun, 'started_at' | 'created_at'>) => {
+  const started = Date.parse(run.started_at || '');
+  if (Number.isFinite(started)) return started;
+  const created = Date.parse(run.created_at || '');
+  if (Number.isFinite(created)) return created;
+  return 0;
+};
+
+const buildProfileCoreStats = (user: LocalUser) => {
+  const userRuns = state.runs.filter((run) => run.user_id === user.id);
+  const userTerritories = state.territories.filter((tile) => tile.owner_id === user.id);
+  const totalStrength = userTerritories.reduce((sum, tile) => sum + (tile.strength || 0), 0);
+  const totalClaimed = userRuns.reduce((sum, run) => sum + (run.territories_claimed || 0), 0);
+  const bestRunClaimed = userRuns.reduce(
+    (maxValue, run) => Math.max(maxValue, run.territories_claimed || 0),
+    0,
+  );
+  const runsWithClaims = userRuns.filter((run) => (run.territories_claimed || 0) > 0).length;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const claimedLast7d = userRuns.reduce((sum, run) => {
+    return runTimestamp(run) >= sevenDaysAgo
+      ? sum + (run.territories_claimed || 0)
+      : sum;
+  }, 0);
+  const sortedRuns = [...userRuns].sort((a, b) => runTimestamp(b) - runTimestamp(a));
+  const recentRun = sortedRuns[0] || null;
+  const claimRatePercent =
+    user.total_runs > 0 ? Number(((runsWithClaims / user.total_runs) * 100).toFixed(1)) : 0;
+
+  return {
+    zones_owned: user.territories_owned || 0,
+    total_strength: totalStrength,
+    average_strength:
+      (user.territories_owned || 0) > 0
+        ? Number((totalStrength / user.territories_owned).toFixed(1))
+        : 0,
+    leaderboard_rank: getLeaderboardRank(user.id),
+    total_claimed: totalClaimed,
+    best_run_claimed: bestRunClaimed,
+    runs_with_claims: runsWithClaims,
+    claimed_last_7d: claimedLast7d,
+    claim_rate_percent: claimRatePercent,
+    recent_run: recentRun
+      ? {
+          id: recentRun.id,
+          distance_km: recentRun.distance_km,
+          duration_seconds: recentRun.duration_seconds,
+          avg_pace: recentRun.avg_pace,
+          territories_claimed: recentRun.territories_claimed,
+          started_at: recentRun.started_at,
+          ended_at: recentRun.ended_at,
+        }
+      : null,
+  };
+};
+
 const handleProfile = (method: string, auth: AuthPayload, init?: RequestInit) => {
   const user = requireUser(auth);
   if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
@@ -463,6 +531,13 @@ const handleProfile = (method: string, auth: AuthPayload, init?: RequestInit) =>
   }
 
   return jsonResponse({ error: 'Method Not Allowed' }, 405);
+};
+
+const handleProfileCoreStats = (method: string, auth: AuthPayload) => {
+  if (method !== 'GET') return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+  return jsonResponse({ core_stats: buildProfileCoreStats(user) });
 };
 
 const handleRuns = (method: string, auth: AuthPayload, init?: RequestInit) => {
@@ -1211,6 +1286,7 @@ export const handleLocalApiRequest = async ({
   if (path === '/api/runs/live/start') return handleRunsLiveStart(method, auth, init);
   if (path === '/api/runs/live/chunk') return handleRunsLiveChunk(method, auth, init);
   if (path === '/api/runs/live/finish') return handleRunsLiveFinish(method, auth, init);
+  if (path === '/api/profile/core-stats') return handleProfileCoreStats(method, auth);
   if (path === '/api/profile') return handleProfile(method, auth, init);
   if (path === '/api/runs') return handleRuns(method, auth, init);
   if (path === '/api/friends') return handleFriends(method, auth, init);
