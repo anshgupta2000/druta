@@ -19,11 +19,13 @@ import {
   Navigation,
   Hexagon,
   Play,
+  Pause,
   Square,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   COLORS,
+  calculateDistance,
   latLngToGrid,
   gridToLatLng,
   getOwnerColor,
@@ -34,6 +36,7 @@ import { useRunTracker } from "@/utils/run/useRunTracker";
 
 const isWeb = Platform.OS === "web";
 const isIOS = Platform.OS === "ios";
+const AUTO_FOLLOW_MIN_MOVE_METERS = 3;
 
 const darkGoogleMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#08080A" }] },
@@ -80,6 +83,7 @@ function NativeMapContent({
   mapRef,
   region,
   onRegionChangeComplete,
+  onPanDrag,
   territories,
   user,
   onMapReady,
@@ -99,6 +103,7 @@ function NativeMapContent({
       style={{ flex: 1 }}
       region={region}
       onRegionChangeComplete={onRegionChangeComplete}
+      onPanDrag={onPanDrag}
       customMapStyle={customMapStyle}
       showsUserLocation={true}
       showsMyLocationButton={false}
@@ -503,6 +508,7 @@ function MetricCell({ label, value, valueColor = COLORS.white, unit }) {
 
 function TrackingDock({
   isRunning,
+  isPaused,
   duration,
   paceDisplay,
   distance,
@@ -510,7 +516,9 @@ function TrackingDock({
   currentAccuracy,
   gpsLabel,
   onStartRun,
-  onStopRun,
+  onPauseRun,
+  onResumeRun,
+  onFinishRun,
   onLocateUser,
   isLocatingUser,
   showLocateButton,
@@ -583,7 +591,7 @@ function TrackingDock({
           }}
         >
           <MetricCell label="Time" value={formatDuration(duration)} />
-          <MetricCell label="Avg Pace" value={paceDisplay} unit="/km" />
+          <MetricCell label="Current Pace" value={paceDisplay} unit="/km" />
           <MetricCell
             label="Distance"
             value={distance.toFixed(2)}
@@ -608,7 +616,7 @@ function TrackingDock({
               letterSpacing: 0.2,
             }}
           >
-            {speedKmh.toFixed(1)} km/h
+            Current Speed {speedKmh.toFixed(1)} km/h
           </Text>
           <Text
             style={{
@@ -629,39 +637,128 @@ function TrackingDock({
             width: "100%",
           }}
         >
-          <View style={{ alignItems: "center" }}>
-            <TouchableOpacity
-              onPress={isRunning ? onStopRun : onStartRun}
-              activeOpacity={0.85}
-              style={{
-                width: 84,
-                height: 84,
-                borderRadius: 42,
-                backgroundColor: isRunning ? COLORS.red : COLORS.orange,
-                alignItems: "center",
-                justifyContent: "center",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.28)",
-              }}
-            >
-              {isRunning ? (
-                <Square size={28} color={COLORS.white} fill={COLORS.white} />
-              ) : (
+          {!isRunning ? (
+            <View style={{ alignItems: "center" }}>
+              <TouchableOpacity
+                onPress={onStartRun}
+                activeOpacity={0.85}
+                style={{
+                  width: 84,
+                  height: 84,
+                  borderRadius: 42,
+                  backgroundColor: COLORS.orange,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.28)",
+                }}
+              >
                 <Play size={32} color={COLORS.black} fill={COLORS.black} />
-              )}
-            </TouchableOpacity>
-            <Text
-              style={{
-                color: isRunning ? COLORS.red : COLORS.orange,
-                fontSize: 13,
-                fontWeight: "700",
-                marginTop: 10,
-                letterSpacing: 0.3,
-              }}
-            >
-              {isRunning ? "Finish" : "Start"}
-            </Text>
-          </View>
+              </TouchableOpacity>
+              <Text
+                style={{
+                  color: COLORS.orange,
+                  fontSize: 13,
+                  fontWeight: "700",
+                  marginTop: 10,
+                  letterSpacing: 0.3,
+                }}
+              >
+                Start
+              </Text>
+            </View>
+          ) : isPaused ? (
+            <View style={{ flexDirection: "row", gap: 16 }}>
+              <View style={{ alignItems: "center" }}>
+                <TouchableOpacity
+                  onPress={onResumeRun}
+                  activeOpacity={0.85}
+                  style={{
+                    width: 84,
+                    height: 84,
+                    borderRadius: 42,
+                    backgroundColor: COLORS.orange,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.28)",
+                  }}
+                >
+                  <Play size={32} color={COLORS.black} fill={COLORS.black} />
+                </TouchableOpacity>
+                <Text
+                  style={{
+                    color: COLORS.orange,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    marginTop: 10,
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Resume
+                </Text>
+              </View>
+              <View style={{ alignItems: "center" }}>
+                <TouchableOpacity
+                  onPress={onFinishRun}
+                  activeOpacity={0.85}
+                  style={{
+                    width: 84,
+                    height: 84,
+                    borderRadius: 42,
+                    backgroundColor: COLORS.red,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.28)",
+                  }}
+                >
+                  <Square size={28} color={COLORS.white} fill={COLORS.white} />
+                </TouchableOpacity>
+                <Text
+                  style={{
+                    color: COLORS.red,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    marginTop: 10,
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Finish
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <View style={{ alignItems: "center" }}>
+              <TouchableOpacity
+                onPress={onPauseRun}
+                activeOpacity={0.85}
+                style={{
+                  width: 84,
+                  height: 84,
+                  borderRadius: 42,
+                  backgroundColor: COLORS.orange,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.28)",
+                }}
+              >
+                <Pause size={30} color={COLORS.black} />
+              </TouchableOpacity>
+              <Text
+                style={{
+                  color: COLORS.orange,
+                  fontSize: 13,
+                  fontWeight: "700",
+                  marginTop: 10,
+                  letterSpacing: 0.3,
+                }}
+              >
+                Pause
+              </Text>
+            </View>
+          )}
 
           {showLocateButton ? (
             <TouchableOpacity
@@ -701,6 +798,7 @@ export default function MapScreen() {
   const { data: user } = useUser();
   const {
     isRunning,
+    isPaused,
     distance,
     duration,
     paceDisplay,
@@ -709,14 +807,18 @@ export default function MapScreen() {
     currentAccuracy,
     currentCoords,
     startRun,
+    pauseRun,
+    resumeRun,
     stopRun,
   } = useRunTracker();
   const mapRef = useRef(null);
+  const lastFollowCoordsRef = useRef(null);
   const [location, setLocation] = useState(null);
   const [locationPermission, setLocationPermission] = useState("loading");
   const [locationError, setLocationError] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const [isFollowingUser, setIsFollowingUser] = useState(true);
   const [region, setRegion] = useState({
     latitude: 12.9716,
     longitude: 77.5946,
@@ -729,8 +831,9 @@ export default function MapScreen() {
     setLocation(currentCoords);
   }, [currentCoords]);
 
-  const centerMapOnCoords = useCallback((coords) => {
+  const centerMapOnCoords = useCallback((coords, options = {}) => {
     if (!coords) return;
+    const { durationMs = 500 } = options;
     const nextRegion = {
       latitude: coords.latitude,
       longitude: coords.longitude,
@@ -749,15 +852,48 @@ export default function MapScreen() {
           },
           zoom: 17,
         },
-        { duration: 500 },
+        { duration: durationMs },
       );
       return;
     }
 
     if (map?.animateToRegion) {
-      map.animateToRegion(nextRegion, 500);
+      map.animateToRegion(nextRegion, durationMs);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isRunning) {
+      return;
+    }
+    setIsFollowingUser(true);
+    lastFollowCoordsRef.current = null;
+  }, [isRunning]);
+
+  useEffect(() => {
+    if (isWeb || !isRunning || !isFollowingUser || !currentCoords) {
+      return;
+    }
+
+    const previous = lastFollowCoordsRef.current;
+    const minMoveMeters = speedKmh < 0.6 ? 6 : AUTO_FOLLOW_MIN_MOVE_METERS;
+    if (
+      previous &&
+      calculateDistance(
+        previous.latitude,
+        previous.longitude,
+        currentCoords.latitude,
+        currentCoords.longitude,
+      ) *
+        1000 <
+        minMoveMeters
+    ) {
+      return;
+    }
+
+    centerMapOnCoords(currentCoords, { durationMs: 450 });
+    lastFollowCoordsRef.current = currentCoords;
+  }, [centerMapOnCoords, currentCoords, isFollowingUser, isRunning, speedKmh]);
 
   useEffect(() => {
     let isMounted = true;
@@ -850,11 +986,12 @@ export default function MapScreen() {
 
   const gpsLabel = useMemo(() => {
     if (!isRunning) return "GPS Ready";
+    if (isPaused) return "Paused";
     if (gpsStatus === "acquiring") return "Acquiring GPS";
     if (gpsStatus === "waiting") return "Waiting for cleaner GPS";
     if (gpsStatus === "ready") return "GPS Locked";
     return "Tracking Live";
-  }, [gpsStatus, isRunning]);
+  }, [gpsStatus, isPaused, isRunning]);
 
   const centerOnUser = useCallback(async () => {
     if (isLocatingUser) {
@@ -889,6 +1026,8 @@ export default function MapScreen() {
       if (immediateTarget) {
         centerMapOnCoords(immediateTarget);
       }
+      setIsFollowingUser(true);
+      lastFollowCoordsRef.current = null;
 
       const lastKnown = await Location.getLastKnownPositionAsync();
       if (
@@ -924,6 +1063,10 @@ export default function MapScreen() {
 
   const handleRegionChangeComplete = useCallback((nextRegion) => {
     setRegion(nextRegion);
+  }, []);
+
+  const handleMapPanDrag = useCallback(() => {
+    setIsFollowingUser(false);
   }, []);
 
   const header = (
@@ -1048,6 +1191,7 @@ export default function MapScreen() {
             mapRef={mapRef}
             region={region}
             onRegionChangeComplete={handleRegionChangeComplete}
+            onPanDrag={handleMapPanDrag}
             territories={territories}
             user={user}
             onMapReady={() => setMapReady(true)}
@@ -1111,6 +1255,7 @@ export default function MapScreen() {
 
       <TrackingDock
         isRunning={isRunning}
+        isPaused={isPaused}
         duration={duration}
         paceDisplay={paceDisplay}
         distance={distance}
@@ -1118,7 +1263,9 @@ export default function MapScreen() {
         currentAccuracy={currentAccuracy}
         gpsLabel={gpsLabel}
         onStartRun={startRun}
-        onStopRun={stopRun}
+        onPauseRun={pauseRun}
+        onResumeRun={resumeRun}
+        onFinishRun={stopRun}
         onLocateUser={centerOnUser}
         isLocatingUser={isLocatingUser}
         showLocateButton={!isWeb}

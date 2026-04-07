@@ -3,7 +3,7 @@ import { Alert, Platform } from "react-native";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useQueryClient } from "@tanstack/react-query";
-import { calculateDistance } from "@/constants/theme";
+import { calculateDistance, formatPace } from "@/constants/theme";
 import { useAuth } from "@/utils/auth/useAuth";
 
 const DISTANCE_COMMIT_THRESHOLD_METERS = 1.5;
@@ -57,6 +57,7 @@ export function useRunTracker() {
   const queryClient = useQueryClient();
 
   const [isRunning, setIsRunning] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [distance, setDistance] = useState(0);
   const [duration, setDuration] = useState(0);
   const [positions, setPositions] = useState([]);
@@ -85,7 +86,7 @@ export function useRunTracker() {
   const lastChunkDistanceMetersRef = useRef(0);
 
   useEffect(() => {
-    if (!isRunning) {
+    if (!isRunning || isPaused) {
       return;
     }
 
@@ -99,7 +100,7 @@ export function useRunTracker() {
         timerRef.current = null;
       }
     };
-  }, [isRunning]);
+  }, [isPaused, isRunning]);
 
   const clearLiveRetryTimer = useCallback(() => {
     if (retryTimerRef.current) {
@@ -498,66 +499,14 @@ export function useRunTracker() {
     [queueLivePoint, updateLiveSpeed],
   );
 
-  const startRun = useCallback(async () => {
-    if (!auth) {
-      signIn();
-      return;
+  const beginLocationTracking = useCallback(async () => {
+    if (locationSub.current) {
+      locationSub.current.remove();
+      locationSub.current = null;
     }
-
-    const servicesEnabled = await Location.hasServicesEnabledAsync();
-    if (!servicesEnabled) {
-      Alert.alert(
-        "Location Services Off",
-        "Turn on location services to start tracking your run.",
-      );
-      return;
-    }
-
-    const currentPermission = await Location.getForegroundPermissionsAsync();
-    const permission =
-      currentPermission.status === "granted"
-        ? currentPermission
-        : await Location.requestForegroundPermissionsAsync();
-
-    if (permission.status !== "granted") {
-      Alert.alert(
-        "Location Required",
-        "Druta needs location access to track your run and pace.",
-      );
-      return;
-    }
-
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
-    const startedAt = new Date().toISOString();
-
-    setIsRunning(true);
-    setDistance(0);
-    setDuration(0);
-    setPositions([]);
-    setStartTime(startedAt);
-    setGpsStatus("acquiring");
-    setCurrentAccuracy(null);
-    setLiveSpeedMps(0);
-    setCurrentCoords(null);
-    lastProcessedPosition.current = null;
-    pendingDistanceMeters.current = 0;
-    totalDistanceMeters.current = 0;
-    speedWindowSamples.current = [];
-    resetLiveSessionRefs();
-
-    try {
-      const liveStartRes = await fetch("/api/runs/live/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ started_at: startedAt }),
-      });
-      if (liveStartRes.ok) {
-        const liveSession = await liveStartRes.json();
-        runSessionIdRef.current = liveSession?.run_session_id || null;
-      }
-    } catch (error) {
-      console.error("Live run start error:", error);
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
 
     try {
@@ -604,7 +553,110 @@ export function useRunTracker() {
         console.error("Fallback location poll error:", err);
       }
     }, FALLBACK_POLL_INTERVAL_MS);
-  }, [acceptLocationSample, auth, resetLiveSessionRefs, signIn]);
+  }, [acceptLocationSample]);
+
+  const startRun = useCallback(async () => {
+    if (!auth) {
+      signIn();
+      return;
+    }
+
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      Alert.alert(
+        "Location Services Off",
+        "Turn on location services to start tracking your run.",
+      );
+      return;
+    }
+
+    const currentPermission = await Location.getForegroundPermissionsAsync();
+    const permission =
+      currentPermission.status === "granted"
+        ? currentPermission
+        : await Location.requestForegroundPermissionsAsync();
+
+    if (permission.status !== "granted") {
+      Alert.alert(
+        "Location Required",
+        "Druta needs location access to track your run and pace.",
+      );
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    const startedAt = new Date().toISOString();
+
+    setIsRunning(true);
+    setIsPaused(false);
+    setDistance(0);
+    setDuration(0);
+    setPositions([]);
+    setStartTime(startedAt);
+    setGpsStatus("acquiring");
+    setCurrentAccuracy(null);
+    setLiveSpeedMps(0);
+    setCurrentCoords(null);
+    lastProcessedPosition.current = null;
+    pendingDistanceMeters.current = 0;
+    totalDistanceMeters.current = 0;
+    speedWindowSamples.current = [];
+    resetLiveSessionRefs();
+
+    try {
+      const liveStartRes = await fetch("/api/runs/live/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ started_at: startedAt }),
+      });
+      if (liveStartRes.ok) {
+        const liveSession = await liveStartRes.json();
+        runSessionIdRef.current = liveSession?.run_session_id || null;
+      }
+    } catch (error) {
+      console.error("Live run start error:", error);
+    }
+
+    await beginLocationTracking();
+  }, [auth, beginLocationTracking, resetLiveSessionRefs, signIn]);
+
+  const pauseRun = useCallback(() => {
+    if (!isRunning || isPaused) {
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsPaused(true);
+    setGpsStatus("paused");
+    stopTracking();
+
+    if (pendingDistanceMeters.current > 0) {
+      totalDistanceMeters.current += pendingDistanceMeters.current;
+      pendingDistanceMeters.current = 0;
+      setDistance(totalDistanceMeters.current / 1000);
+    }
+
+    setLiveSpeedMps(0);
+    speedWindowSamples.current = [];
+    lastProcessedPosition.current = null;
+  }, [isPaused, isRunning, stopTracking]);
+
+  const resumeRun = useCallback(async () => {
+    if (!isRunning || !isPaused) {
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsPaused(false);
+    setGpsStatus("acquiring");
+    setLiveSpeedMps(0);
+    speedWindowSamples.current = [];
+    lastProcessedPosition.current = null;
+    pendingDistanceMeters.current = 0;
+
+    await beginLocationTracking();
+  }, [beginLocationTracking, isPaused, isRunning]);
 
   const stopRun = useCallback(async () => {
     if (!isRunning) {
@@ -613,6 +665,7 @@ export function useRunTracker() {
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setIsRunning(false);
+    setIsPaused(false);
     setGpsStatus("idle");
     stopTracking();
 
@@ -709,33 +762,13 @@ export function useRunTracker() {
     };
   }, [resetLiveSessionRefs, stopTracking]);
 
-  const paceDisplay = useMemo(() => {
-    if (distance <= 0 || duration <= 0) {
-      return "--:--";
-    }
-
-    const minutesPerKm = duration / 60 / distance;
-    if (!Number.isFinite(minutesPerKm) || minutesPerKm <= 0) {
-      return "--:--";
-    }
-
-    const mins = Math.floor(minutesPerKm);
-    const secs = Math.floor((minutesPerKm - mins) * 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  }, [distance, duration]);
-
-  const averageSpeedMps = useMemo(() => {
-    if (duration <= 0 || distance <= 0) {
-      return 0;
-    }
-    return (distance * 1000) / duration;
-  }, [distance, duration]);
-
-  const speedMps = isRunning ? liveSpeedMps : averageSpeedMps;
+  const speedMps = isRunning && !isPaused ? liveSpeedMps : 0;
   const speedKmh = Math.max(0, speedMps * 3.6);
+  const paceDisplay = useMemo(() => formatPace(speedKmh), [speedKmh]);
 
   return {
     isRunning,
+    isPaused,
     distance,
     duration,
     paceDisplay,
@@ -744,6 +777,8 @@ export function useRunTracker() {
     currentAccuracy,
     currentCoords,
     startRun,
+    pauseRun,
+    resumeRun,
     stopRun,
   };
 }
