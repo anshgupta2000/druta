@@ -6,6 +6,7 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Share as NativeShare,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,6 +22,12 @@ import {
   Play,
   Pause,
   Square,
+  Filter,
+  X,
+  Target,
+  AlertTriangle,
+  Share2,
+  Route,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
@@ -101,6 +108,8 @@ function NativeMapContent({
   territories,
   user,
   onMapReady,
+  onTerritoryPress,
+  overlayMode,
 }) {
   const MapView = require("react-native-maps").default;
   const { PROVIDER_GOOGLE, Polygon } = require("react-native-maps");
@@ -133,9 +142,11 @@ function NativeMapContent({
           region.latitude,
         );
         const color = getOwnerColor(territory.owner_id);
+        const isThreat = overlayMode === "threat" && (territory.strength || 0) <= 3;
+        const fillBase = isThreat ? COLORS.orange : color;
         const opacity = Math.min(0.18 + (territory.strength || 1) * 0.05, 0.55);
         const isOwn = territory.owner_id === user?.id;
-        const strokeColor = isOwn ? COLORS.accent : color;
+        const strokeColor = isThreat ? COLORS.orange : isOwn ? COLORS.accent : color;
         const alpha = Math.round(opacity * 255)
           .toString(16)
           .padStart(2, "0");
@@ -149,9 +160,11 @@ function NativeMapContent({
               { latitude: bounds.latEnd, longitude: bounds.lngEnd },
               { latitude: bounds.lat, longitude: bounds.lngEnd },
             ]}
-            fillColor={`${color}${alpha}`}
+            fillColor={`${fillBase}${alpha}`}
             strokeColor={`${strokeColor}AA`}
-            strokeWidth={1}
+            strokeWidth={isThreat ? 2 : 1}
+            tappable
+            onPress={() => onTerritoryPress?.(territory)}
           />
         );
       })}
@@ -159,7 +172,7 @@ function NativeMapContent({
   );
 }
 
-function WebMapFallback({ territories, user, location, title, subtitle }) {
+function WebMapFallback({ territories, user, location, title, subtitle, onTerritoryPress }) {
   const myTerritories = territories.filter((t) => t.owner_id === user?.id);
   const otherTerritories = territories.filter((t) => t.owner_id !== user?.id);
 
@@ -366,6 +379,8 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
         )}
       </Animated.View>
 
+      <View style={{ height: 330 }} />
+
       <Text
         style={{
           color: COLORS.accent,
@@ -430,8 +445,12 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
         </Animated.View>
       )}
       {myTerritories.map((territory, idx) => (
-        <Animated.View
+        <TouchableOpacity
           key={`${territory.grid_lat}-${territory.grid_lng}`}
+          activeOpacity={0.86}
+          onPress={() => onTerritoryPress?.(territory)}
+        >
+          <Animated.View
           entering={FadeInDown.delay(idx * 40).duration(300)}
           style={{
             backgroundColor: COLORS.accentMuted,
@@ -507,7 +526,8 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
               LVL {territory.strength || 0}
             </Text>
           </View>
-        </Animated.View>
+          </Animated.View>
+        </TouchableOpacity>
       ))}
 
       {otherTerritories.length > 0 && (
@@ -527,24 +547,28 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
           {otherTerritories.map((territory, idx) => {
             const ownerColor = getOwnerColor(territory.owner_id);
             return (
-              <Animated.View
+              <TouchableOpacity
                 key={`${territory.grid_lat}-${territory.grid_lng}`}
-                entering={FadeInDown.delay(
-                  (myTerritories.length + idx) * 40,
-                ).duration(300)}
-                style={{
-                  backgroundColor: COLORS.surface,
-                  borderRadius: 16,
-                  padding: 16,
-                  marginBottom: 8,
-                  borderWidth: 1,
-                  borderColor: COLORS.border,
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
+                activeOpacity={0.86}
+                onPress={() => onTerritoryPress?.(territory)}
               >
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Animated.View
+                  entering={FadeInDown.delay(
+                    (myTerritories.length + idx) * 40,
+                  ).duration(300)}
+                  style={{
+                    backgroundColor: COLORS.surface,
+                    borderRadius: 16,
+                    padding: 16,
+                    marginBottom: 8,
+                    borderWidth: 1,
+                    borderColor: COLORS.border,
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <View
                     style={{
                       width: 40,
@@ -606,7 +630,8 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
                     LVL {territory.strength || 0}
                   </Text>
                 </View>
-              </Animated.View>
+                </Animated.View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -1027,6 +1052,534 @@ function TrackingDock({
   );
 }
 
+function ZoneDetailSheet({
+  zone,
+  isLoading,
+  onClose,
+  onRunZone,
+  bottomInset,
+}) {
+  if (!zone && !isLoading) return null;
+
+  const statusColor =
+    zone?.status === "under_threat"
+      ? COLORS.orange
+      : zone?.status === "yours"
+        ? COLORS.accent
+        : zone?.status === "rival"
+          ? COLORS.red
+          : COLORS.textSecondary;
+  const title = zone?.label || "Loading zone";
+  const strength = zone?.strength || 0;
+
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: 12,
+        right: 12,
+        bottom: bottomInset + 66,
+        zIndex: 35,
+      }}
+    >
+      <Animated.View
+        entering={FadeInDown.duration(240)}
+        style={{
+          backgroundColor: "rgba(7,10,16,0.98)",
+          borderRadius: 28,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.13)",
+          padding: 16,
+          overflow: "hidden",
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 16 },
+          shadowOpacity: 0.45,
+          shadowRadius: 30,
+        }}
+      >
+        <View
+          style={{
+            position: "absolute",
+            left: 18,
+            right: 18,
+            top: 0,
+            height: 2,
+            backgroundColor: statusColor,
+          }}
+        />
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                color: statusColor,
+                fontSize: 11,
+                fontWeight: "900",
+                letterSpacing: 1.5,
+                textTransform: "uppercase",
+              }}
+            >
+              {zone?.status === "under_threat"
+                ? "Under threat"
+                : zone?.status === "yours"
+                  ? "Your zone"
+                  : zone?.status === "rival"
+                    ? "Rival zone"
+                    : "Neutral zone"}
+            </Text>
+            <Text
+              style={{
+                color: COLORS.white,
+                fontSize: 22,
+                fontWeight: "900",
+                letterSpacing: -0.7,
+                marginTop: 5,
+              }}
+              numberOfLines={1}
+            >
+              {title}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={onClose}
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              backgroundColor: COLORS.surface,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        <View
+          style={{
+            marginTop: 14,
+            minHeight: 92,
+            borderRadius: 20,
+            backgroundColor: "rgba(255,255,255,0.035)",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            padding: 14,
+          }}
+        >
+          {isLoading ? (
+            <ActivityIndicator color={COLORS.accent} />
+          ) : (
+            <>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 12,
+                }}
+              >
+                <Text style={{ color: COLORS.textSecondary, fontSize: 13, fontWeight: "700" }}>
+                  Owner
+                </Text>
+                <Text style={{ color: COLORS.white, fontSize: 14, fontWeight: "800" }}>
+                  {zone?.owner_username || "Open"}
+                </Text>
+              </View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 12,
+                }}
+              >
+                <Text style={{ color: COLORS.textSecondary, fontSize: 13, fontWeight: "700" }}>
+                  Strength
+                </Text>
+                <Text style={{ color: COLORS.white, fontSize: 14, fontWeight: "800" }}>
+                  {strength}/10 · {zone?.days_until_decay || 0}d to decay
+                </Text>
+              </View>
+              <View
+                style={{
+                  height: 6,
+                  borderRadius: 4,
+                  backgroundColor: COLORS.surfaceElevated,
+                  overflow: "hidden",
+                }}
+              >
+                <View
+                  style={{
+                    height: "100%",
+                    width: `${Math.max(8, strength * 10)}%`,
+                    borderRadius: 4,
+                    backgroundColor: statusColor,
+                  }}
+                />
+              </View>
+            </>
+          )}
+        </View>
+
+        {!isLoading && zone?.closest_rival ? (
+          <View
+            style={{
+              marginTop: 10,
+              flexDirection: "row",
+              alignItems: "center",
+              borderRadius: 16,
+              padding: 12,
+              backgroundColor: "rgba(255,107,53,0.1)",
+              borderWidth: 1,
+              borderColor: COLORS.orangeDim,
+            }}
+          >
+            <AlertTriangle size={16} color={COLORS.orange} />
+            <Text
+              style={{
+                color: COLORS.textSecondary,
+                fontSize: 12,
+                fontWeight: "700",
+                marginLeft: 8,
+                flex: 1,
+              }}
+            >
+              {zone.closest_rival.username} is {zone.lead_m}m behind this zone.
+            </Text>
+          </View>
+        ) : null}
+
+        <TouchableOpacity
+          onPress={onRunZone}
+          activeOpacity={0.86}
+          style={{
+            marginTop: 12,
+            minHeight: 54,
+            borderRadius: 17,
+            backgroundColor: zone?.status === "rival" ? COLORS.orange : COLORS.accent,
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 8,
+          }}
+        >
+          <Target size={19} color={COLORS.black} />
+          <Text style={{ color: COLORS.black, fontSize: 16, fontWeight: "900" }}>
+            Run Through This Zone
+          </Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+}
+
+function MapFilterSheet({
+  visible,
+  viewMode,
+  overlayMode,
+  onSetViewMode,
+  onSetOverlayMode,
+  onClose,
+  bottomInset,
+}) {
+  if (!visible) return null;
+  const views = [
+    ["mine", "My zones"],
+    ["friends", "Friends"],
+    ["all", "All zones"],
+  ];
+  const overlays = [
+    ["threat", "Threat level"],
+    ["strength", "Zone strength"],
+    ["activity", "Recent activity"],
+  ];
+
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: 12,
+        right: 12,
+        bottom: bottomInset + 66,
+        zIndex: 40,
+      }}
+    >
+      <Animated.View
+        entering={FadeInDown.duration(220)}
+        style={{
+          backgroundColor: "rgba(7,10,16,0.98)",
+          borderRadius: 26,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.13)",
+          padding: 16,
+        }}
+      >
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text style={{ color: COLORS.white, fontSize: 20, fontWeight: "900" }}>
+            Map Filters
+          </Text>
+          <TouchableOpacity onPress={onClose} style={{ padding: 8 }}>
+            <X size={19} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
+        <Text style={{ color: COLORS.textTertiary, fontSize: 11, fontWeight: "800", letterSpacing: 1.1, marginTop: 14 }}>
+          VIEW
+        </Text>
+        <View style={{ gap: 8, marginTop: 8 }}>
+          {views.map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              onPress={() => onSetViewMode(key)}
+              style={{
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                borderWidth: 1,
+                borderColor: viewMode === key ? COLORS.borderAccent : COLORS.border,
+                backgroundColor: viewMode === key ? COLORS.accentMuted : COLORS.surface,
+                flexDirection: "row",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: COLORS.white, fontSize: 14, fontWeight: "800" }}>
+                {label}
+              </Text>
+              {viewMode === key ? <Shield size={16} color={COLORS.accent} /> : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={{ color: COLORS.textTertiary, fontSize: 11, fontWeight: "800", letterSpacing: 1.1, marginTop: 16 }}>
+          OVERLAY
+        </Text>
+        <View style={{ gap: 8, marginTop: 8 }}>
+          {overlays.map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              onPress={() => onSetOverlayMode(key)}
+              style={{
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                borderWidth: 1,
+                borderColor: overlayMode === key ? COLORS.orangeDim : COLORS.border,
+                backgroundColor: overlayMode === key ? "rgba(255,107,53,0.1)" : COLORS.surface,
+                flexDirection: "row",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: COLORS.white, fontSize: 14, fontWeight: "800" }}>
+                {label}
+              </Text>
+              {overlayMode === key ? <Zap size={16} color={COLORS.orange} /> : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
+function CaptureToast({ event, bottomInset }) {
+  if (!event) return null;
+  const isRival = event.type === "capture";
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: 18,
+        right: 18,
+        bottom: bottomInset + 375,
+        zIndex: 34,
+      }}
+    >
+      <Animated.View
+        entering={FadeInDown.duration(180)}
+        style={{
+          borderRadius: 18,
+          padding: 14,
+          backgroundColor: isRival ? "rgba(255,107,53,0.18)" : "rgba(45,122,255,0.18)",
+          borderWidth: 1,
+          borderColor: isRival ? COLORS.orangeDim : COLORS.borderAccent,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <Hexagon size={18} color={isRival ? COLORS.orange : COLORS.accent} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: COLORS.white, fontSize: 14, fontWeight: "900" }}>
+            {event.message}
+          </Text>
+          <Text style={{ color: COLORS.textSecondary, fontSize: 11, fontWeight: "700", marginTop: 2 }}>
+            Strength {event.strength}/10
+          </Text>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
+function RunSummaryOverlay({ summary, onClose, bottomInset }) {
+  if (!summary) return null;
+  const territory = summary.territory_summary || {};
+  const claimed = Number(territory.territories_claimed || 0);
+  const captured = Number(territory.territories_captured || 0);
+  const strengthened = Number(territory.territories_strengthened || 0);
+  const tiles = summary.changed_tiles || [];
+  const handleShare = async () => {
+    await NativeShare.share({
+      message: `DRUTA run: +${claimed} zones, ${Number(summary.distance_km || 0).toFixed(2)} km, ${captured} captured from rivals.`,
+    }).catch(() => null);
+  };
+
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 60,
+        backgroundColor: "rgba(0,0,0,0.72)",
+        justifyContent: "flex-end",
+      }}
+    >
+      <Animated.View
+        entering={FadeInDown.duration(260)}
+        style={{
+          marginHorizontal: 12,
+          marginBottom: bottomInset + 68,
+          backgroundColor: "rgba(7,10,16,0.99)",
+          borderRadius: 30,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.13)",
+          padding: 18,
+        }}
+      >
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text style={{ color: COLORS.textTertiary, fontSize: 11, fontWeight: "900", letterSpacing: 1.5 }}>
+            RUN COMPLETE
+          </Text>
+          <TouchableOpacity onPress={onClose} style={{ padding: 8 }}>
+            <X size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
+        <Text
+          style={{
+            color: claimed > 0 ? COLORS.accent : COLORS.white,
+            fontSize: 48,
+            lineHeight: 54,
+            fontWeight: "900",
+            letterSpacing: -2,
+            marginTop: 4,
+          }}
+        >
+          +{claimed} zones
+        </Text>
+        <Text style={{ color: COLORS.textSecondary, fontSize: 15, fontWeight: "700" }}>
+          {captured} captured from rivals · {strengthened} reinforced
+        </Text>
+
+        <View
+          style={{
+            marginTop: 16,
+            height: 112,
+            borderRadius: 20,
+            backgroundColor: "#03060C",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            overflow: "hidden",
+          }}
+        >
+          {Array.from({ length: 35 }).map((_, index) => {
+            const active = tiles[index % Math.max(tiles.length, 1)] && index < Math.max(tiles.length * 2, 6);
+            return (
+              <View
+                key={index}
+                style={{
+                  position: "absolute",
+                  left: 18 + (index % 7) * 48,
+                  top: 22 + Math.floor(index / 7) * 20,
+                  width: 36,
+                  height: 16,
+                  borderRadius: 6,
+                  backgroundColor: active
+                    ? index % 5 === 0
+                      ? COLORS.orange
+                      : COLORS.accent
+                    : "rgba(255,255,255,0.08)",
+                  opacity: active ? 0.9 : 0.45,
+                  transform: [{ rotate: "-35deg" }],
+                }}
+              />
+            );
+          })}
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
+          <View style={{ flex: 1, backgroundColor: COLORS.surface, borderRadius: 15, padding: 12, borderWidth: 1, borderColor: COLORS.border }}>
+            <Text style={{ color: COLORS.textTertiary, fontSize: 10, fontWeight: "900" }}>DISTANCE</Text>
+            <Text style={{ color: COLORS.white, fontSize: 20, fontWeight: "900", marginTop: 3 }}>
+              {Number(summary.distance_km || 0).toFixed(2)} km
+            </Text>
+          </View>
+          <View style={{ flex: 1, backgroundColor: COLORS.surface, borderRadius: 15, padding: 12, borderWidth: 1, borderColor: COLORS.border }}>
+            <Text style={{ color: COLORS.textTertiary, fontSize: 10, fontWeight: "900" }}>TIME</Text>
+            <Text style={{ color: COLORS.white, fontSize: 20, fontWeight: "900", marginTop: 3 }}>
+              {formatDuration(summary.duration_seconds || 0)}
+            </Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
+          <TouchableOpacity
+            onPress={onClose}
+            style={{
+              flex: 1,
+              minHeight: 52,
+              borderRadius: 16,
+              backgroundColor: COLORS.accent,
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            <Route size={18} color={COLORS.black} />
+            <Text style={{ color: COLORS.black, fontSize: 15, fontWeight: "900" }}>
+              View Full Map
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleShare}
+            style={{
+              width: 56,
+              minHeight: 52,
+              borderRadius: 16,
+              backgroundColor: COLORS.surface,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Share2 size={19} color={COLORS.white} />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { data: user } = useUser();
@@ -1042,6 +1595,9 @@ export default function MapScreen() {
     gpsStatus,
     currentAccuracy,
     currentCoords,
+    captureEvents,
+    lastRunSummary,
+    clearLastRunSummary,
     startRun,
     pauseRun,
     resumeRun,
@@ -1055,9 +1611,13 @@ export default function MapScreen() {
   const [mapReady, setMapReady] = useState(false);
   const [isLocatingUser, setIsLocatingUser] = useState(false);
   const [isFollowingUser, setIsFollowingUser] = useState(true);
+  const [selectedTerritory, setSelectedTerritory] = useState(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [viewMode, setViewMode] = useState("all");
+  const [overlayMode, setOverlayMode] = useState("threat");
   const [region, setRegion] = useState({
-    latitude: 12.9716,
-    longitude: 77.5946,
+    latitude: 37.7599,
+    longitude: -122.4148,
     latitudeDelta: 0.02,
     longitudeDelta: 0.02,
   });
@@ -1146,7 +1706,7 @@ export default function MapScreen() {
           return;
         }
 
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await Location.getForegroundPermissionsAsync();
         if (!isMounted) return;
 
         setLocationPermission(status);
@@ -1214,6 +1774,23 @@ export default function MapScreen() {
   const myTerritories = useMemo(
     () => territories.filter((t) => t.owner_id === user?.id),
     [territories, user?.id],
+  );
+  const visibleTerritories = useMemo(() => {
+    if (viewMode === "mine") {
+      return territories.filter((territory) => territory.owner_id === user?.id);
+    }
+    return territories;
+  }, [territories, user?.id, viewMode]);
+  const underThreatCount = useMemo(
+    () =>
+      myTerritories.filter((territory) => {
+        const lastRunAt = Date.parse(territory.last_run_at || "");
+        const ageDays = Number.isFinite(lastRunAt)
+          ? (Date.now() - lastRunAt) / (24 * 60 * 60 * 1000)
+          : 0;
+        return (territory.strength || 0) <= 3 || ageDays >= 3;
+      }).length,
+    [myTerritories],
   );
   const totalStrength = useMemo(
     () => myTerritories.reduce((sum, t) => sum + (t.strength || 0), 0),
@@ -1305,6 +1882,36 @@ export default function MapScreen() {
     setIsFollowingUser(false);
   }, []);
 
+  const handleTerritoryPress = useCallback((territory) => {
+    setSelectedTerritory(territory);
+    setShowFilters(false);
+  }, []);
+
+  const { data: selectedZoneData, isLoading: isZoneLoading } = useQuery({
+    queryKey: [
+      "territory-detail",
+      selectedTerritory?.grid_lat,
+      selectedTerritory?.grid_lng,
+    ],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/territories/detail?gridLat=${selectedTerritory.grid_lat}&gridLng=${selectedTerritory.grid_lng}`,
+      );
+      if (!res.ok) throw new Error("Failed to fetch territory detail");
+      return res.json();
+    },
+    enabled:
+      selectedTerritory?.grid_lat !== undefined &&
+      selectedTerritory?.grid_lng !== undefined,
+  });
+
+  const selectedZone = selectedZoneData?.zone || selectedTerritory;
+
+  const runSelectedZone = useCallback(() => {
+    setSelectedTerritory(null);
+    startRun();
+  }, [startRun]);
+
   const header = (
     <View
       style={{
@@ -1334,7 +1941,26 @@ export default function MapScreen() {
         >
           druta<Text style={{ color: COLORS.accent }}>.</Text>
         </Text>
-        <View style={{ flexDirection: "row", gap: 10 }}>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => {
+              setShowFilters(true);
+              setSelectedTerritory(null);
+            }}
+            activeOpacity={0.82}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: COLORS.surface,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Filter size={16} color={COLORS.textSecondary} />
+          </TouchableOpacity>
           <View
             style={{
               flexDirection: "row",
@@ -1383,6 +2009,35 @@ export default function MapScreen() {
               {totalStrength}
             </Text>
           </View>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              backgroundColor:
+                underThreatCount > 0 ? "rgba(255,107,53,0.14)" : COLORS.surface,
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor:
+                underThreatCount > 0 ? COLORS.orangeDim : COLORS.border,
+            }}
+          >
+            <AlertTriangle
+              size={13}
+              color={underThreatCount > 0 ? COLORS.orange : COLORS.textTertiary}
+            />
+            <Text
+              style={{
+                color: COLORS.white,
+                fontSize: 13,
+                fontWeight: "700",
+                marginLeft: 5,
+              }}
+            >
+              {underThreatCount}
+            </Text>
+          </View>
         </View>
       </View>
     </View>
@@ -1428,9 +2083,11 @@ export default function MapScreen() {
             region={region}
             onRegionChangeComplete={handleRegionChangeComplete}
             onPanDrag={handleMapPanDrag}
-            territories={territories}
+            territories={visibleTerritories}
             user={user}
             onMapReady={() => setMapReady(true)}
+            onTerritoryPress={handleTerritoryPress}
+            overlayMode={overlayMode}
           />
 
           {header}
@@ -1477,9 +2134,10 @@ export default function MapScreen() {
         <>
           {header}
           <WebMapFallback
-            territories={territories}
+            territories={visibleTerritories}
             user={user}
             location={location}
+            onTerritoryPress={handleTerritoryPress}
             title="Territory Map"
             subtitle={
               "Full interactive map loads on your device.\nHere's your territory overview."
@@ -1506,6 +2164,35 @@ export default function MapScreen() {
         onLocateUser={centerOnUser}
         isLocatingUser={isLocatingUser}
         showLocateButton={!isWeb}
+        bottomInset={insets.bottom}
+      />
+
+      <CaptureToast
+        event={captureEvents?.[0]}
+        bottomInset={insets.bottom}
+      />
+
+      <ZoneDetailSheet
+        zone={selectedZone}
+        isLoading={isZoneLoading}
+        onClose={() => setSelectedTerritory(null)}
+        onRunZone={runSelectedZone}
+        bottomInset={insets.bottom}
+      />
+
+      <MapFilterSheet
+        visible={showFilters}
+        viewMode={viewMode}
+        overlayMode={overlayMode}
+        onSetViewMode={setViewMode}
+        onSetOverlayMode={setOverlayMode}
+        onClose={() => setShowFilters(false)}
+        bottomInset={insets.bottom}
+      />
+
+      <RunSummaryOverlay
+        summary={lastRunSummary}
+        onClose={clearLastRunSummary}
         bottomInset={insets.bottom}
       />
     </View>

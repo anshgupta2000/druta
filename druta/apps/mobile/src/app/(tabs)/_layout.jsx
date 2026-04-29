@@ -1,21 +1,26 @@
-import { Tabs } from "expo-router";
+import { Tabs, useSegments } from "expo-router";
 import { View } from "react-native";
-import { Navigation, Swords, User, Trophy } from "lucide-react-native";
+import { Navigation, Swords, User, Trophy, Bell } from "lucide-react-native";
 import { COLORS } from "@/constants/theme";
 
 export default function TabLayout() {
+  const segments = useSegments();
+  const hideTabBar = segments.includes("avatar-creator");
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: COLORS.black,
-          borderTopWidth: 0.5,
-          borderTopColor: COLORS.border,
-          paddingTop: 6,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
+        tabBarStyle: hideTabBar
+          ? { display: "none" }
+          : {
+              backgroundColor: COLORS.black,
+              borderTopWidth: 0.5,
+              borderTopColor: COLORS.border,
+              paddingTop: 6,
+              elevation: 0,
+              shadowOpacity: 0,
+            },
         tabBarActiveTintColor: COLORS.accent,
         tabBarInactiveTintColor: COLORS.textTertiary,
         tabBarLabelStyle: {
@@ -107,6 +112,34 @@ export default function TabLayout() {
               }}
             >
               <Trophy
+                color={color}
+                size={22}
+                strokeWidth={focused ? 2.5 : 1.8}
+              />
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: "Activity",
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                ...(focused
+                  ? {
+                      shadowColor: COLORS.accent,
+                      shadowOffset: { width: 0, height: 0 },
+                      shadowOpacity: 0.6,
+                      shadowRadius: 8,
+                    }
+                  : {}),
+              }}
+            >
+              <Bell
                 color={color}
                 size={22}
                 strokeWidth={focused ? 2.5 : 1.8}

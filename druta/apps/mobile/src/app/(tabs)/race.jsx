@@ -10,9 +10,7 @@ import {
   Check,
   X,
   ChevronRight,
-  Trophy,
   Flame,
-  CircleDot,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { COLORS, calculateDistance, formatDuration } from "@/constants/theme";
@@ -29,6 +27,7 @@ export default function RaceScreen() {
   const [myDistance, setMyDistance] = useState(0);
   const [raceDuration, setRaceDuration] = useState(0);
   const [view, setView] = useState("lobby");
+  const [countdown, setCountdown] = useState(3);
 
   const locationSub = useRef(null);
   const timerRef = useRef(null);
@@ -54,8 +53,24 @@ export default function RaceScreen() {
     },
   });
 
+  const { data: leaderboardData } = useQuery({
+    queryKey: ["leaderboard", "race-targets"],
+    queryFn: async () => {
+      const res = await fetch("/api/leaderboard?sort=territories");
+      if (!res.ok) throw new Error("Failed to fetch leaderboard");
+      return res.json();
+    },
+  });
+
   const races = racesData?.races || [];
   const friends = friendsData?.friends || [];
+  const friendIds = new Set(
+    friends.map((friend) => String(friend.friend_user_id || friend.id)),
+  );
+  const raceTargets = (leaderboardData?.leaderboard || [])
+    .filter((entry) => entry.id !== user?.id)
+    .filter((entry) => !friendIds.has(String(entry.id)))
+    .slice(0, 4);
   const pendingChallenges = races.filter(
     (r) => r.status === "pending" && r.opponent_id === user?.id,
   );
@@ -78,7 +93,10 @@ export default function RaceScreen() {
           body: JSON.stringify({
             opponent_id: friendId,
             race_type: "distance",
-            target_value: 1,
+            target_value: 5,
+            time_limit_minutes: 45,
+            stake_zones: 5,
+            winner_bonus_strength: 3,
           }),
         });
         if (res.ok) {
@@ -106,7 +124,7 @@ export default function RaceScreen() {
       if (res.ok) {
         const data = await res.json();
         setActiveRace(data.race);
-        startRacing(data.race);
+        setView("setup");
       }
     } catch (err) {
       console.error("Accept error:", err);
@@ -180,6 +198,36 @@ export default function RaceScreen() {
     }, 3000);
   }, []);
 
+  const readyAndStart = useCallback(async () => {
+    if (!activeRace) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      const res = await fetch("/api/races", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ race_id: activeRace.id, action: "ready" }),
+      });
+      const data = res.ok ? await res.json() : {};
+      const readyRace = data.race || activeRace;
+      setActiveRace(readyRace);
+      setCountdown(3);
+      setView("countdown");
+
+      let tick = 3;
+      const interval = setInterval(() => {
+        tick -= 1;
+        if (tick <= 0) {
+          clearInterval(interval);
+          startRacing(readyRace);
+          return;
+        }
+        setCountdown(tick);
+      }, 900);
+    } catch (err) {
+      console.error("Ready race error:", err);
+    }
+  }, [activeRace, startRacing]);
+
   const finishRace = useCallback(
     (race) => {
       setView("result");
@@ -205,6 +253,21 @@ export default function RaceScreen() {
     },
     [user, queryClient],
   );
+
+  const forfeitRace = useCallback(async () => {
+    if (!activeRace) return;
+    try {
+      const res = await fetch("/api/races", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ race_id: activeRace.id, action: "forfeit" }),
+      });
+      const data = res.ok ? await res.json() : {};
+      finishRace(data.race || { ...activeRace, winner_id: null });
+    } catch (err) {
+      console.error("Forfeit race error:", err);
+    }
+  }, [activeRace, finishRace]);
 
   useEffect(() => {
     if (
@@ -250,6 +313,180 @@ export default function RaceScreen() {
   const myProgress = Math.min((myDistance / targetKm) * 100, 100);
   const oppProgress = Math.min((opponentDistance / targetKm) * 100, 100);
   const gap = myDistance - opponentDistance;
+
+  if (view === "setup" && activeRace) {
+    return (
+      <View style={{ flex: 1, backgroundColor: COLORS.black }}>
+        <StatusBar style="light" />
+        <ScrollView
+          contentContainerStyle={{
+            paddingTop: insets.top + 20,
+            paddingHorizontal: 24,
+            paddingBottom: 120,
+          }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text
+            style={{
+              color: COLORS.textTertiary,
+              fontSize: 12,
+              fontWeight: "800",
+              letterSpacing: 2,
+            }}
+          >
+            RACE TERMS
+          </Text>
+          <Text
+            style={{
+              color: COLORS.white,
+              fontSize: 38,
+              fontWeight: "900",
+              letterSpacing: -1.2,
+              marginTop: 8,
+              lineHeight: 42,
+            }}
+          >
+            You vs {opponentName}
+          </Text>
+
+          <View
+            style={{
+              marginTop: 24,
+              backgroundColor: COLORS.surface,
+              borderRadius: 26,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+            }}
+          >
+            {[
+              ["Distance", `${targetKm} km`],
+              ["Time limit", `${activeRace.time_limit_minutes || 45} min`],
+              ["Stakes", `+${activeRace.winner_bonus_strength || 3} strength`],
+              ["Zones affected", `${activeRace.stake_zones || 5} weakest rival zones`],
+            ].map(([label, value], index) => (
+              <View
+                key={label}
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  paddingVertical: 13,
+                  borderBottomWidth: index === 3 ? 0 : 1,
+                  borderBottomColor: COLORS.border,
+                }}
+              >
+                <Text style={{ color: COLORS.textSecondary, fontSize: 15, fontWeight: "700" }}>
+                  {label}
+                </Text>
+                <Text style={{ color: COLORS.white, fontSize: 15, fontWeight: "900" }}>
+                  {value}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          <View
+            style={{
+              marginTop: 16,
+              borderRadius: 20,
+              padding: 16,
+              backgroundColor: COLORS.orangeDim,
+              borderWidth: 1,
+              borderColor: COLORS.orangeDim,
+            }}
+          >
+            <Text style={{ color: COLORS.orange, fontSize: 15, fontWeight: "900" }}>
+              Winner does not steal zones outright.
+            </Text>
+            <Text style={{ color: COLORS.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 6 }}>
+              This is a raid: winning weakens the loser’s territory and creates a clear reason for the next run.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            onPress={readyAndStart}
+            activeOpacity={0.88}
+            style={{
+              marginTop: 28,
+              minHeight: 58,
+              borderRadius: 18,
+              backgroundColor: COLORS.accent,
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+            }}
+          >
+            <Flame size={18} color={COLORS.black} />
+            <Text style={{ color: COLORS.black, fontSize: 17, fontWeight: "900" }}>
+              I'm Ready
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => {
+              setView("lobby");
+              setActiveRace(null);
+            }}
+            style={{ alignItems: "center", paddingVertical: 18 }}
+          >
+            <Text style={{ color: COLORS.textTertiary, fontSize: 14, fontWeight: "700" }}>
+              Back to Lobby
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (view === "countdown" && activeRace) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: COLORS.black,
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: 24,
+        }}
+      >
+        <StatusBar style="light" />
+        <Text style={{ color: COLORS.textSecondary, fontSize: 16, fontWeight: "800" }}>
+          {opponentName} is ready
+        </Text>
+        <Text
+          style={{
+            color: COLORS.white,
+            fontSize: 48,
+            fontWeight: "900",
+            letterSpacing: -1.5,
+            marginTop: 12,
+          }}
+        >
+          Starting in {countdown}
+        </Text>
+        <View
+          style={{
+            width: "100%",
+            marginTop: 34,
+            borderRadius: 28,
+            backgroundColor: COLORS.surface,
+            borderWidth: 1,
+            borderColor: COLORS.borderAccent,
+            padding: 28,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: COLORS.textDisabled, fontSize: 70, fontWeight: "900" }}>
+            0.00
+          </Text>
+          <Text style={{ color: COLORS.textTertiary, fontSize: 14, fontWeight: "800" }}>
+            vs {opponentName}
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   // Racing view
   if (view === "racing" && activeRace) {
@@ -491,6 +728,43 @@ export default function RaceScreen() {
               >
                 {formatDuration(raceDuration)}
               </Text>
+            </View>
+
+            <View style={{ flexDirection: "row", gap: 12, marginTop: 28 }}>
+              <TouchableOpacity
+                onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+                style={{
+                  flex: 1,
+                  minHeight: 54,
+                  borderRadius: 16,
+                  backgroundColor: COLORS.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 8,
+                }}
+              >
+                <Text style={{ color: COLORS.textSecondary, fontSize: 16, fontWeight: "900" }}>
+                  Pause
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={forfeitRace}
+                style={{
+                  flex: 1.15,
+                  minHeight: 54,
+                  borderRadius: 16,
+                  backgroundColor: COLORS.orange,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: COLORS.white, fontSize: 16, fontWeight: "900" }}>
+                  Forfeit Race
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -802,7 +1076,7 @@ export default function RaceScreen() {
                 key={race.id}
                 onPress={() => {
                   setActiveRace(race);
-                  startRacing(race);
+                  setView("setup");
                 }}
                 style={{
                   backgroundColor: COLORS.surface,
@@ -863,7 +1137,7 @@ export default function RaceScreen() {
           >
             CHALLENGE
           </Text>
-          {friends.length === 0 && (
+          {friends.length === 0 && raceTargets.length === 0 && (
             <View
               style={{
                 backgroundColor: COLORS.surface,
@@ -976,6 +1250,161 @@ export default function RaceScreen() {
               </TouchableOpacity>
             </View>
           ))}
+          {raceTargets.length > 0 && (
+            <View style={{ marginTop: friends.length > 0 ? 18 : 0 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Text
+                  style={{
+                    color: COLORS.textSecondary,
+                    fontSize: 13,
+                    fontWeight: "800",
+                    letterSpacing: 0.6,
+                  }}
+                >
+                  Suggested rivals
+                </Text>
+                <Text
+                  style={{
+                    color: COLORS.orange,
+                    fontSize: 12,
+                    fontWeight: "800",
+                  }}
+                >
+                  targets above you
+                </Text>
+              </View>
+              {raceTargets.map((rival, index) => {
+                const existingRace = races.find(
+                  (race) =>
+                    [String(race.challenger_id), String(race.opponent_id)].includes(String(rival.id)) &&
+                    ["pending", "active"].includes(race.status),
+                );
+                return (
+                  <View
+                    key={rival.id}
+                    style={{
+                      backgroundColor: index === 0 ? COLORS.orangeDim : COLORS.surface,
+                      borderRadius: 20,
+                      padding: 16,
+                      marginBottom: 9,
+                      borderWidth: 1,
+                      borderColor: index === 0 ? COLORS.orangeDim : COLORS.border,
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+                        <View
+                          style={{
+                            width: 46,
+                            height: 46,
+                            borderRadius: 18,
+                            backgroundColor: rival.avatar_color || COLORS.purple,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 12,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color: COLORS.white,
+                              fontSize: 16,
+                              fontWeight: "900",
+                            }}
+                          >
+                            {(rival.username || rival.name || "?")
+                              .slice(0, 2)
+                              .toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1, paddingRight: 10 }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                            <Text
+                              numberOfLines={1}
+                              style={{
+                                color: COLORS.white,
+                                fontSize: 16,
+                                fontWeight: "900",
+                                maxWidth: 135,
+                              }}
+                            >
+                              {rival.username || rival.name || "Runner"}
+                            </Text>
+                            <View
+                              style={{
+                                backgroundColor: index === 0 ? COLORS.orangeDim : COLORS.accentMuted,
+                                paddingHorizontal: 8,
+                                paddingVertical: 3,
+                                borderRadius: 10,
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color: index === 0 ? COLORS.orange : COLORS.accent,
+                                  fontSize: 11,
+                                  fontWeight: "900",
+                                }}
+                              >
+                                #{index + 1}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text
+                            style={{
+                              color: COLORS.textTertiary,
+                              fontSize: 12,
+                              marginTop: 4,
+                              fontWeight: "700",
+                            }}
+                          >
+                            {rival.territories_owned || 0} zones · {rival.wins || 0}W {rival.losses || 0}L
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        disabled={Boolean(existingRace)}
+                        onPress={() => challengeFriend(rival.id)}
+                        style={{
+                          backgroundColor: existingRace ? COLORS.surfaceElevated : COLORS.orange,
+                          paddingHorizontal: 15,
+                          paddingVertical: 10,
+                          borderRadius: 13,
+                          borderWidth: existingRace ? 1 : 0,
+                          borderColor: COLORS.border,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: existingRace ? COLORS.textTertiary : COLORS.white,
+                            fontWeight: "900",
+                            fontSize: 13,
+                          }}
+                        >
+                          {existingRace?.status === "active"
+                            ? "Ready"
+                            : existingRace
+                              ? "Sent"
+                              : "Race"}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
         </View>
 
         {/* Recent Results */}

@@ -66,6 +66,36 @@ const normalizePointForLive = (point) => {
   };
 };
 
+const buildCaptureEvents = (tiles, currentUserId) => {
+  if (!Array.isArray(tiles) || tiles.length === 0) {
+    return [];
+  }
+
+  return tiles
+    .filter((tile) => tile && tile.grid_lat !== undefined && tile.grid_lng !== undefined)
+    .map((tile) => {
+      const isMine = String(tile.owner_id) === String(currentUserId || "");
+      const isCapture = Boolean(tile.was_captured) || (!isMine && tile.previous_owner_id);
+      const type = isCapture ? "capture" : tile.was_strengthened ? "reinforce" : "claim";
+      const label = `Zone ${tile.grid_lat}, ${tile.grid_lng}`;
+      return {
+        id: `${Date.now()}-${tile.grid_lat}-${tile.grid_lng}-${type}`,
+        type,
+        label,
+        owner_username: tile.owner_username,
+        strength: tile.strength || 1,
+        created_at: Date.now(),
+        message:
+          type === "capture"
+            ? `Captured from ${tile.previous_owner_username || "a rival"}`
+            : type === "reinforce"
+              ? `Reinforced ${label}`
+              : `Claimed ${label}`,
+        accent: type === "capture" ? "rival" : "owned",
+      };
+    });
+};
+
 export function useRunTracker() {
   const { signIn, auth } = useAuth();
   const queryClient = useQueryClient();
@@ -82,6 +112,8 @@ export function useRunTracker() {
   const [currentCoords, setCurrentCoords] = useState(null);
   const [elevationGainM, setElevationGainM] = useState(0);
   const [elevationLossM, setElevationLossM] = useState(0);
+  const [captureEvents, setCaptureEvents] = useState([]);
+  const [lastRunSummary, setLastRunSummary] = useState(null);
 
   const locationSub = useRef(null);
   const timerRef = useRef(null);
@@ -279,7 +311,18 @@ export function useRunTracker() {
         }
 
         const data = await res.json();
-        mergeChangedTilesIntoCache(data?.changed_tiles || []);
+        const changedTiles = data?.changed_tiles || [];
+        mergeChangedTilesIntoCache(changedTiles);
+        const events = buildCaptureEvents(changedTiles, auth?.user?.id);
+        if (events.length > 0) {
+          setCaptureEvents((prev) => [...events, ...prev].slice(0, 10));
+          const hasCapture = events.some((event) => event.type === "capture");
+          Haptics.notificationAsync(
+            hasCapture
+              ? Haptics.NotificationFeedbackType.Success
+              : Haptics.NotificationFeedbackType.Warning,
+          ).catch(() => null);
+        }
 
         pendingLivePointsRef.current.splice(0, payload.points.length);
         chunkSeqRef.current = Math.max(chunkSeqRef.current, payload.seq);
@@ -296,7 +339,12 @@ export function useRunTracker() {
         return false;
       }
     },
-    [clearLiveRetryTimer, mergeChangedTilesIntoCache, scheduleLiveChunkRetry],
+    [
+      auth?.user?.id,
+      clearLiveRetryTimer,
+      mergeChangedTilesIntoCache,
+      scheduleLiveChunkRetry,
+    ],
   );
 
   const queueLivePoint = useCallback(
@@ -734,6 +782,7 @@ export function useRunTracker() {
     setElevationGainM(0);
     setElevationLossM(0);
     setCurrentCoords(null);
+    setCaptureEvents([]);
     lastProcessedPosition.current = null;
     pendingDistanceMeters.current = 0;
     totalDistanceMeters.current = 0;
@@ -853,6 +902,7 @@ export function useRunTracker() {
                 finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
               started_at: finalStartedAt,
               final_points: finalPoints,
+              route_data: finalPositions,
               elevation_gain_m: finalElevationGainMeters,
               elevation_loss_m: finalElevationLossMeters,
             }),
@@ -861,6 +911,17 @@ export function useRunTracker() {
           if (!finishRes.ok) {
             throw new Error(`finish failed: ${finishRes.status}`);
           }
+          const finishData = await finishRes.json().catch(() => ({}));
+          setLastRunSummary({
+            run: finishData?.run || null,
+            territory_summary: finishData?.territory_summary || {},
+            changed_tiles: finishData?.changed_tiles || [],
+            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+            duration_seconds: finalDurationSeconds,
+            elevation_gain_m: finalElevationGainMeters,
+            elevation_loss_m: finalElevationLossMeters,
+            completed_at: new Date().toISOString(),
+          });
 
           queryClient.invalidateQueries({ queryKey: ["runs"] });
           queryClient.invalidateQueries({ queryKey: ["profile"] });
@@ -876,7 +937,7 @@ export function useRunTracker() {
         try {
           const routeData =
             finalPositions.length > 0 ? JSON.stringify(finalPositions) : null;
-          await fetch("/api/runs", {
+          const saveRes = await fetch("/api/runs", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -890,6 +951,21 @@ export function useRunTracker() {
               elevation_gain_m: finalElevationGainMeters,
               elevation_loss_m: finalElevationLossMeters,
             }),
+          });
+          const saveData = await saveRes.json().catch(() => ({}));
+          setLastRunSummary({
+            run: saveData?.run || null,
+            territory_summary: {
+              territories_claimed: 0,
+              territories_captured: 0,
+              territories_strengthened: 0,
+            },
+            changed_tiles: [],
+            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+            duration_seconds: finalDurationSeconds,
+            elevation_gain_m: finalElevationGainMeters,
+            elevation_loss_m: finalElevationLossMeters,
+            completed_at: new Date().toISOString(),
           });
           queryClient.invalidateQueries({ queryKey: ["runs"] });
           queryClient.invalidateQueries({ queryKey: ["profile"] });
@@ -923,6 +999,9 @@ export function useRunTracker() {
   const speedMps = isRunning && !isPaused ? liveSpeedMps : 0;
   const speedKmh = Math.max(0, speedMps * 3.6);
   const paceDisplay = useMemo(() => formatPace(speedKmh), [speedKmh]);
+  const clearLastRunSummary = useCallback(() => {
+    setLastRunSummary(null);
+  }, []);
 
   return {
     isRunning,
@@ -936,6 +1015,9 @@ export function useRunTracker() {
     gpsStatus,
     currentAccuracy,
     currentCoords,
+    captureEvents,
+    lastRunSummary,
+    clearLastRunSummary,
     startRun,
     pauseRun,
     resumeRun,

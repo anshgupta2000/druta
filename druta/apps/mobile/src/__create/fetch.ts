@@ -33,6 +33,26 @@ const isSecondPartyURL = (url: string) => {
   return url.startsWith('/_create/');
 };
 
+const getStoredAuth = async () => {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const localValue = window.localStorage.getItem(authKey);
+    if (localValue) {
+      try {
+        return JSON.parse(localValue);
+      } catch {}
+    }
+  }
+
+  try {
+    const secureValue = await SecureStore.getItemAsync(authKey);
+    if (secureValue) {
+      return JSON.parse(secureValue);
+    }
+  } catch {}
+
+  return null;
+};
+
 type Params = Parameters<typeof expoFetch>;
 const fetchToWeb = async function fetchWithHeaders(...args: Params) {
   const firstPartyURL = process.env.EXPO_PUBLIC_BASE_URL;
@@ -51,6 +71,15 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
   // we should not add headers to requests that don't go to our own server
   if (isExternalFetch) {
     return expoFetch(input, init);
+  }
+
+  const auth = await getStoredAuth();
+
+  if (shouldUseLocalApiFallback()) {
+    const localResponse = await handleLocalApiRequest({ url, init, auth });
+    if (localResponse) {
+      return localResponse;
+    }
   }
 
   let finalInput = input;
@@ -88,23 +117,8 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
     }
   }
 
-  const auth = await SecureStore.getItemAsync(authKey)
-    .then((auth) => {
-      return auth ? JSON.parse(auth) : null;
-    })
-    .catch(() => {
-      return null;
-    });
-
   if (auth) {
     finalHeaders.set('authorization', `Bearer ${auth.jwt}`);
-  }
-
-  if (shouldUseLocalApiFallback()) {
-    const localResponse = await handleLocalApiRequest({ url, init, auth });
-    if (localResponse) {
-      return localResponse;
-    }
   }
 
   return expoFetch(finalInput, {

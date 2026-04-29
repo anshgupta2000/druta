@@ -2,7 +2,7 @@ import React from 'react';
 import Constants from 'expo-constants';
 import { Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { AuthWebView } from './AuthWebView';
-import { useAuthModal, useAuthStore } from './store';
+import { authKey, useAuthModal, useAuthStore } from './store';
 
 const DEV_AUTH_PORT = process.env.EXPO_PUBLIC_AUTH_PORT || '3000';
 
@@ -80,7 +80,8 @@ export const AuthModal = () => {
     process.env.EXPO_PUBLIC_AUTH_PROXY_BASE_URL ||
     process.env.EXPO_PUBLIC_PROXY_BASE_URL ||
     baseURL;
-  const canUseHostedAuth = Boolean(baseURL && proxyURL);
+  const canUseHostedAuth =
+    process.env.EXPO_PUBLIC_FORCE_LOCAL_API !== 'true' && Boolean(baseURL && proxyURL);
 
   const completeLocalAuth = React.useCallback(() => {
     const normalizedEmail =
@@ -89,15 +90,20 @@ export const AuthModal = () => {
     const userId = `local-${normalizedEmail
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')}`;
-
-    setAuth({
+    const nextAuth = {
       jwt: `local-dev-token:${userId}`,
       user: {
         id: userId,
         email: normalizedEmail,
         name: displayName,
       },
-    });
+    };
+
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(authKey, JSON.stringify(nextAuth));
+    }
+
+    setAuth(nextAuth);
     close();
   }, [close, email, name, setAuth]);
 

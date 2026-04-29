@@ -13,14 +13,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { ChevronLeft, Check, Save, Shirt } from "lucide-react-native";
+import { ChevronLeft, Check, Save, Shirt, Lock } from "lucide-react-native";
 import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
 import { COLORS } from "@/constants/theme";
 import {
   CATEGORIES,
-  LOCKER_ITEMS,
   getItemsByCategory,
-  getItemById,
 } from "@/constants/lockerCatalog";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -46,6 +44,7 @@ export default function LockerScreen() {
   });
 
   const currentLoadout = profileData?.user?.outfit_loadout || {};
+  const profile = profileData?.user || {};
 
   // Track local equipped items
   const [localLoadout, setLocalLoadout] = useState(null);
@@ -153,6 +152,46 @@ export default function LockerScreen() {
     [equippedLoadout],
   );
 
+  const getUnlockRequirement = useCallback(
+    (item) => {
+      const numericId = Number(String(item.id).replace(/\D/g, "")) || 1;
+      if (numericId <= 2) {
+        return { unlocked: true, label: "Unlocked" };
+      }
+
+      if (item.category === "shoes") {
+        const needed = 25 + numericId * 12;
+        return {
+          unlocked: Number(profile.total_distance_km || 0) >= needed,
+          label: `${needed} km total`,
+        };
+      }
+
+      if (item.category === "accessories") {
+        const needed = Math.max(1, Math.ceil(numericId / 2));
+        return {
+          unlocked: Number(profile.wins || 0) >= needed,
+          label: `${needed} race wins`,
+        };
+      }
+
+      if (item.category === "caps") {
+        const needed = 20 + numericId * 5;
+        return {
+          unlocked: Number(profile.territories_owned || 0) >= needed,
+          label: `${needed} zones owned`,
+        };
+      }
+
+      const needed = 5 + numericId * 8;
+      return {
+        unlocked: Number(profile.territories_owned || 0) >= needed,
+        label: `${needed} zones owned`,
+      };
+    },
+    [profile.total_distance_km, profile.territories_owned, profile.wins],
+  );
+
   const hasChanges = useMemo(() => {
     return (
       localLoadout !== null &&
@@ -180,6 +219,8 @@ export default function LockerScreen() {
         ? item.colors.find((c) => c.id === equippedColorId)
         : null;
       const isSelected = selectedItem?.id === item.id;
+      const requirement = getUnlockRequirement(item);
+      const locked = !requirement.unlocked;
 
       return (
         <Animated.View
@@ -188,6 +229,10 @@ export default function LockerScreen() {
         >
           <TouchableOpacity
             onPress={() => {
+              if (locked) {
+                setSelectedItem(item);
+                return;
+              }
               if (isSelected) {
                 setSelectedItem(null);
               } else {
@@ -200,6 +245,7 @@ export default function LockerScreen() {
               backgroundColor: equipped
                 ? COLORS.surfaceElevated
                 : COLORS.surface,
+              opacity: locked ? 0.58 : 1,
               borderRadius: 20,
               padding: 16,
               borderWidth: 1,
@@ -228,6 +274,26 @@ export default function LockerScreen() {
                 }}
               >
                 <Check size={12} color={COLORS.black} strokeWidth={3} />
+              </View>
+            )}
+
+            {locked && (
+              <View
+                style={{
+                  position: "absolute",
+                  top: 10,
+                  right: 10,
+                  width: 24,
+                  height: 24,
+                  borderRadius: 12,
+                  backgroundColor: COLORS.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Lock size={12} color={COLORS.textTertiary} />
               </View>
             )}
 
@@ -298,7 +364,7 @@ export default function LockerScreen() {
               </View>
             )}
 
-            {!equippedColor && (
+            {!equippedColor && !locked && (
               <Text
                 style={{
                   color: COLORS.textDisabled,
@@ -309,6 +375,21 @@ export default function LockerScreen() {
                 }}
               >
                 {item.colors.length} colors
+              </Text>
+            )}
+
+            {locked && (
+              <Text
+                style={{
+                  color: COLORS.gold,
+                  fontSize: 10,
+                  textAlign: "center",
+                  marginTop: 6,
+                  fontWeight: "700",
+                }}
+                numberOfLines={1}
+              >
+                {requirement.label}
               </Text>
             )}
           </TouchableOpacity>
@@ -326,50 +407,76 @@ export default function LockerScreen() {
                 borderColor: COLORS.borderLight,
               }}
             >
-              {/* Color swatches */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={{ flexGrow: 0, marginBottom: 10 }}
-              >
-                {item.colors.map((color, ci) => {
-                  const isActive = ci === selectedColorIndex;
-                  return (
-                    <TouchableOpacity
-                      key={color.id}
-                      onPress={() => setSelectedColorIndex(ci)}
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 14,
-                        backgroundColor: color.hex,
-                        marginRight: 6,
-                        borderWidth: isActive ? 2 : 0,
-                        borderColor: COLORS.white,
-                        shadowColor: isActive ? color.hex : "transparent",
-                        shadowOpacity: isActive ? 0.6 : 0,
-                        shadowRadius: isActive ? 8 : 0,
-                        shadowOffset: { width: 0, height: 0 },
-                      }}
-                    />
-                  );
-                })}
-              </ScrollView>
+              {locked ? (
+                <View>
+                  <Text
+                    style={{
+                      color: COLORS.white,
+                      fontSize: 13,
+                      fontWeight: "800",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Goal visible
+                  </Text>
+                  <Text
+                    style={{
+                      color: COLORS.textSecondary,
+                      fontSize: 12,
+                      lineHeight: 18,
+                      marginBottom: 10,
+                    }}
+                  >
+                    Unlock this by reaching {requirement.label}. Locked gear stays visible so the next target is always obvious.
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ flexGrow: 0, marginBottom: 10 }}
+                >
+                  {item.colors.map((color, ci) => {
+                    const isActive = ci === selectedColorIndex;
+                    return (
+                      <TouchableOpacity
+                        key={color.id}
+                        onPress={() => setSelectedColorIndex(ci)}
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: 14,
+                          backgroundColor: color.hex,
+                          marginRight: 6,
+                          borderWidth: isActive ? 2 : 0,
+                          borderColor: COLORS.white,
+                          shadowColor: isActive ? color.hex : "transparent",
+                          shadowOpacity: isActive ? 0.6 : 0,
+                          shadowRadius: isActive ? 8 : 0,
+                          shadowOffset: { width: 0, height: 0 },
+                        }}
+                      />
+                    );
+                  })}
+                </ScrollView>
+              )}
 
               {/* Selected color name */}
-              <Text
-                style={{
-                  color: COLORS.textSecondary,
-                  fontSize: 11,
-                  fontWeight: "600",
-                  marginBottom: 10,
-                }}
-              >
-                {item.colors[selectedColorIndex]?.name}
-              </Text>
+              {!locked && (
+                <Text
+                  style={{
+                    color: COLORS.textSecondary,
+                    fontSize: 11,
+                    fontWeight: "600",
+                    marginBottom: 10,
+                  }}
+                >
+                  {item.colors[selectedColorIndex]?.name}
+                </Text>
+              )}
 
               {/* Equip / Unequip buttons */}
-              <View style={{ flexDirection: "row", gap: 8 }}>
+              {!locked && <View style={{ flexDirection: "row", gap: 8 }}>
                 <TouchableOpacity
                   onPress={() =>
                     handleEquip(item, item.colors[selectedColorIndex])
@@ -417,6 +524,7 @@ export default function LockerScreen() {
                   </TouchableOpacity>
                 )}
               </View>
+              }
             </Animated.View>
           )}
         </Animated.View>
@@ -427,6 +535,7 @@ export default function LockerScreen() {
       selectedColorIndex,
       isEquipped,
       getEquippedColor,
+      getUnlockRequirement,
       handleEquip,
       handleUnequip,
     ],

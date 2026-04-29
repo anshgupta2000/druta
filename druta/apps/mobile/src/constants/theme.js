@@ -129,5 +129,11 @@ export const TERRITORY_COLORS = [
 
 export function getOwnerColor(ownerId) {
   if (!ownerId) return "rgba(255,255,255,0.1)";
-  return TERRITORY_COLORS[ownerId % TERRITORY_COLORS.length];
+  const raw = String(ownerId);
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = (hash << 5) - hash + raw.charCodeAt(i);
+    hash |= 0;
+  }
+  return TERRITORY_COLORS[Math.abs(hash) % TERRITORY_COLORS.length];
 }

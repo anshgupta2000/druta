@@ -40,6 +40,12 @@ type LocalRun = {
   duration_seconds: number;
   avg_pace: number | null;
   territories_claimed: number;
+  territories_captured?: number;
+  territories_strengthened?: number;
+  changed_tiles?: Array<Record<string, unknown>>;
+  elevation_gain_m?: number;
+  elevation_loss_m?: number;
+  route_data?: Array<Record<string, unknown>> | string | null;
   started_at: string;
   ended_at: string;
   created_at: string;
@@ -59,6 +65,11 @@ type LocalRace = {
   opponent_id: string;
   race_type: string;
   target_value: number;
+  time_limit_minutes?: number;
+  stake_zones?: number;
+  winner_bonus_strength?: number;
+  ready_challenger?: boolean;
+  ready_opponent?: boolean;
   status: 'pending' | 'active' | 'declined' | 'finished';
   challenger_distance: number;
   opponent_distance: number;
@@ -146,6 +157,10 @@ const state: {
 };
 
 const colorPalette = ['#3B82F6', '#22C55E', '#F97316', '#A855F7', '#14B8A6'];
+const STREET_NAMES = ['Valencia', 'Mission', 'Market', 'Hayes', 'Castro', 'Divisadero', 'Folsom', 'Bryant', 'Oak', 'Page', 'Guerrero', 'Dolores'];
+const CROSS_STREETS = ['8th', '12th', '16th', '18th', '20th', '24th', 'Duboce', 'Fell', 'Grove', 'Noe', 'Church', 'Van Ness'];
+const localNotificationPreferences = new Map<string, Record<string, string>>();
+const seededDemoUsers = new Set<string>();
 
 const colorForUser = (id: string) => {
   let hash = 0;
@@ -239,6 +254,19 @@ const runSessionTileKey = (
   subjectType: string,
   subjectId: string
 ) => `${runSessionId}:${gridLat}:${gridLng}:${subjectType}:${subjectId}`;
+
+const zoneLabel = (gridLat: number, gridLng: number) => {
+  const hash = Math.abs(gridLat * 31 + gridLng * 17);
+  return `${STREET_NAMES[hash % STREET_NAMES.length]} & ${
+    CROSS_STREETS[(hash >> 2) % CROSS_STREETS.length]
+  }`;
+};
+
+const daysSince = (value?: string | null) => {
+  const ts = Date.parse(value || '');
+  if (!Number.isFinite(ts)) return 999;
+  return Math.max(0, (Date.now() - ts) / (24 * 60 * 60 * 1000));
+};
 
 const resolveTopOwner = (
   contributionMap: Map<string, number>,
@@ -383,6 +411,265 @@ const getBody = (init?: RequestInit) => {
   }
 };
 
+const DEMO_RIVALS = [
+  {
+    id: 'demo-alex-k',
+    username: 'alex_k',
+    name: 'Alex K',
+    email: 'alex_k@druta.local',
+    total_distance_km: 612,
+    total_runs: 126,
+    territories_owned: 124,
+    wins: 12,
+    losses: 3,
+    avatar_color: '#5B4BC4',
+  },
+  {
+    id: 'demo-jruns',
+    username: 'jruns',
+    name: 'Jordan Runs',
+    email: 'jruns@druta.local',
+    total_distance_km: 438,
+    total_runs: 94,
+    territories_owned: 98,
+    wins: 7,
+    losses: 2,
+    avatar_color: '#0F8D6E',
+  },
+  {
+    id: 'demo-yuki-m',
+    username: 'yuki_m',
+    name: 'Yuki M',
+    email: 'yuki_m@druta.local',
+    total_distance_km: 302,
+    total_runs: 62,
+    territories_owned: 54,
+    wins: 5,
+    losses: 6,
+    avatar_color: '#B84E1D',
+  },
+  {
+    id: 'demo-max-run',
+    username: 'max_run',
+    name: 'Max Run',
+    email: 'max_run@druta.local',
+    total_distance_km: 246,
+    total_runs: 51,
+    territories_owned: 47,
+    wins: 3,
+    losses: 4,
+    avatar_color: '#6236AD',
+  },
+] as const;
+
+const upsertDemoRival = (rival: (typeof DEMO_RIVALS)[number]) => {
+  const existing = state.users.get(rival.id);
+  if (existing) {
+    state.users.set(rival.id, {
+      ...existing,
+      ...rival,
+      image: existing.image,
+      avatar_url: existing.avatar_url,
+      avatar_code: existing.avatar_code,
+      avatar_thumbnail_url: existing.avatar_thumbnail_url,
+      outfit_loadout: existing.outfit_loadout,
+    });
+    return;
+  }
+
+  state.users.set(rival.id, {
+    ...rival,
+    image: null,
+    avatar_url: null,
+    avatar_code: null,
+    avatar_thumbnail_url: null,
+    outfit_loadout: {},
+  });
+};
+
+const addDemoFriend = (userId: string, friendId: string) => {
+  const exists = state.friends.some(
+    (friend) =>
+      (friend.user_id === userId && friend.friend_id === friendId) ||
+      (friend.user_id === friendId && friend.friend_id === userId)
+  );
+  if (exists) return;
+  state.friends.push({
+    id: state.ids.friend++,
+    user_id: userId,
+    friend_id: friendId,
+    status: 'accepted',
+    created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+  });
+};
+
+const setContribution = (
+  gridLat: number,
+  gridLng: number,
+  userId: string,
+  distanceMeters: number
+) => {
+  const key = tileKey(gridLat, gridLng);
+  const contributionMap = state.territoryContributions.get(key) || new Map<string, number>();
+  contributionMap.set(contributionSubjectKey('user', userId), distanceMeters);
+  state.territoryContributions.set(key, contributionMap);
+};
+
+const upsertDemoTerritory = ({
+  gridLat,
+  gridLng,
+  ownerId,
+  ownerUsername,
+  strength,
+  ageDays,
+  rivalId,
+}: {
+  gridLat: number;
+  gridLng: number;
+  ownerId: string;
+  ownerUsername: string;
+  strength: number;
+  ageDays: number;
+  rivalId?: string;
+}) => {
+  let territory = state.territories.find(
+    (tile) => tile.grid_lat === gridLat && tile.grid_lng === gridLng
+  );
+  const lastRunAt = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000).toISOString();
+  if (!territory) {
+    territory = {
+      id: state.ids.territory++,
+      grid_lat: gridLat,
+      grid_lng: gridLng,
+      owner_id: ownerId,
+      owner_username: ownerUsername,
+      strength,
+      last_run_at: lastRunAt,
+    };
+    state.territories.push(territory);
+  } else {
+    territory.owner_id = ownerId;
+    territory.owner_username = ownerUsername;
+    territory.strength = Math.max(1, Math.min(10, strength));
+    territory.last_run_at = lastRunAt;
+  }
+
+  setContribution(gridLat, gridLng, ownerId, strength * 85 + 220);
+  if (rivalId) {
+    setContribution(gridLat, gridLng, rivalId, strength <= 3 ? strength * 80 + 185 : strength * 55);
+  }
+};
+
+const ensureDemoWorldForUser = (user: LocalUser) => {
+  if (seededDemoUsers.has(user.id) || user.id.startsWith('demo-')) return;
+  seededDemoUsers.add(user.id);
+
+  DEMO_RIVALS.forEach(upsertDemoRival);
+
+  addDemoFriend(user.id, 'demo-jruns');
+  addDemoFriend(user.id, 'demo-yuki-m');
+
+  if (user.total_runs === 0) {
+    user.total_distance_km = Math.max(user.total_distance_km, 284);
+    user.total_runs = Math.max(user.total_runs, 47);
+    user.wins = Math.max(user.wins, 7);
+    user.losses = Math.max(user.losses, 2);
+  }
+
+  const center = latLngToGrid(37.7599, -122.4148);
+  let ownedSeeded = 0;
+  let rivalSeeded = 0;
+  for (let row = -5; row <= 4; row += 1) {
+    for (let col = -4; col <= 4; col += 1) {
+      const gridLat = center.gridLat + row;
+      const gridLng = center.gridLng + col;
+      const contested = (row + col) % 5 === 0;
+      const rivalBand = row >= 3 || col >= 3 || (row === -4 && col <= -2);
+      if (!rivalBand && ownedSeeded < 58) {
+        upsertDemoTerritory({
+          gridLat,
+          gridLng,
+          ownerId: user.id,
+          ownerUsername: user.username || user.name || 'you',
+          strength: contested ? 2 : 4 + Math.abs((row + col) % 4),
+          ageDays: contested ? 3.25 : Math.abs((row * col) % 3) + 0.3,
+          rivalId: contested ? 'demo-alex-k' : undefined,
+        });
+        ownedSeeded += 1;
+      } else if (rivalSeeded < 24) {
+        const rival = DEMO_RIVALS[(rivalSeeded + Math.abs(row)) % DEMO_RIVALS.length];
+        upsertDemoTerritory({
+          gridLat,
+          gridLng,
+          ownerId: rival.id,
+          ownerUsername: rival.username,
+          strength: 2 + Math.abs((row - col) % 5),
+          ageDays: Math.abs((row + col) % 4) + 0.5,
+          rivalId: user.id,
+        });
+        rivalSeeded += 1;
+      }
+    }
+  }
+
+  user.territories_owned = Math.max(user.territories_owned, 58);
+  state.users.set(user.id, user);
+
+  const hasSeedRuns = state.runs.some((run) => run.user_id === user.id);
+  if (!hasSeedRuns) {
+    const samples = [
+      { distance_km: 4.2, duration_seconds: 1266, avg_pace: 5.01, zones: 11, captured: 2, daysAgo: 0.1 },
+      { distance_km: 6.1, duration_seconds: 1844, avg_pace: 5.04, zones: 7, captured: 1, daysAgo: 1 },
+      { distance_km: 3.8, duration_seconds: 1198, avg_pace: 5.15, zones: 4, captured: 0, daysAgo: 3 },
+    ];
+    for (const sample of samples) {
+      const startedAt = new Date(Date.now() - sample.daysAgo * 24 * 60 * 60 * 1000).toISOString();
+      state.runs.push({
+        id: state.ids.run++,
+        user_id: user.id,
+        distance_km: sample.distance_km,
+        duration_seconds: sample.duration_seconds,
+        avg_pace: sample.avg_pace,
+        territories_claimed: sample.zones,
+        territories_captured: sample.captured,
+        territories_strengthened: Math.max(0, sample.zones - sample.captured),
+        changed_tiles: [],
+        elevation_gain_m: 42,
+        elevation_loss_m: 37,
+        route_data: null,
+        started_at: startedAt,
+        ended_at: new Date(Date.parse(startedAt) + sample.duration_seconds * 1000).toISOString(),
+        created_at: startedAt,
+      });
+    }
+  }
+
+  const hasIncomingRace = state.races.some(
+    (race) => race.opponent_id === user.id && race.challenger_id === 'demo-alex-k'
+  );
+  if (!hasIncomingRace) {
+    state.races.push({
+      id: state.ids.race++,
+      challenger_id: 'demo-alex-k',
+      opponent_id: user.id,
+      race_type: 'distance',
+      target_value: 5,
+      time_limit_minutes: 45,
+      stake_zones: 5,
+      winner_bonus_strength: 3,
+      ready_challenger: true,
+      ready_opponent: false,
+      status: 'pending',
+      challenger_distance: 0,
+      opponent_distance: 0,
+      winner_id: null,
+      created_at: new Date(Date.now() - 38 * 60 * 1000).toISOString(),
+      started_at: null,
+      ended_at: null,
+    });
+  }
+};
+
 const requireUser = (auth: AuthPayload) => {
   const user = auth?.user;
   if (!user?.id) {
@@ -409,7 +696,9 @@ const requireUser = (auth: AuthPayload) => {
       outfit_loadout: {},
     });
   }
-  return state.users.get(user.id)!;
+  const localUser = state.users.get(user.id)!;
+  ensureDemoWorldForUser(localUser);
+  return localUser;
 };
 
 const withRaceUsers = (race: LocalRace) => {
@@ -425,15 +714,30 @@ const withRaceUsers = (race: LocalRace) => {
 };
 
 const listLeaderboard = (sortBy: string) => {
+  DEMO_RIVALS.forEach(upsertDemoRival);
   const users = Array.from(state.users.values());
-  if (sortBy === 'distance') {
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const weeklyStatsFor = (userId: string) => {
+    const weeklyRuns = state.runs.filter(
+      (run) => run.user_id === userId && runTimestamp(run) >= sevenDaysAgo
+    );
+    return {
+      weekly_zones: weeklyRuns.reduce((sum, run) => sum + (run.territories_claimed || 0), 0),
+      weekly_distance_km: weeklyRuns.reduce((sum, run) => sum + (run.distance_km || 0), 0),
+    };
+  };
+  if (sortBy === 'weekly') {
+    users.sort((a, b) => {
+      return weeklyStatsFor(b.id).weekly_zones - weeklyStatsFor(a.id).weekly_zones;
+    });
+  } else if (sortBy === 'distance') {
     users.sort((a, b) => b.total_distance_km - a.total_distance_km);
   } else if (sortBy === 'wins') {
     users.sort((a, b) => b.wins - a.wins);
   } else {
     users.sort((a, b) => b.territories_owned - a.territories_owned);
   }
-  return users.slice(0, 50);
+  return users.slice(0, 50).map((user) => ({ ...user, ...weeklyStatsFor(user.id) }));
 };
 
 const getLeaderboardRank = (userId: string) => {
@@ -562,6 +866,12 @@ const handleRuns = (method: string, auth: AuthPayload, init?: RequestInit) => {
       duration_seconds: Number(body.duration_seconds || 0),
       avg_pace: body.avg_pace ? Number(body.avg_pace) : null,
       territories_claimed: Number(body.territories_claimed || 0),
+      territories_captured: Number(body.territories_captured || 0),
+      territories_strengthened: Number(body.territories_strengthened || 0),
+      changed_tiles: Array.isArray(body.changed_tiles) ? body.changed_tiles : [],
+      elevation_gain_m: Number(body.elevation_gain_m || 0),
+      elevation_loss_m: Number(body.elevation_loss_m || 0),
+      route_data: body.route_data || null,
       started_at: body.started_at || now,
       ended_at: now,
       created_at: now,
@@ -602,6 +912,7 @@ const applyDistanceToTile = ({
   const existingTerritory =
     state.territories.find((tile) => tile.grid_lat === gridLat && tile.grid_lng === gridLng) || null;
   const previousOwnerId = existingTerritory?.owner_id || null;
+  const previousOwnerUsername = existingTerritory?.owner_username || null;
   const previousStrength = existingTerritory?.strength ?? 1;
   const ownership = resolveTopOwner(contributionMap, existingTerritory?.owner_id);
   if (!ownership) {
@@ -674,9 +985,14 @@ const applyDistanceToTile = ({
     grid_lng: gridLng,
     owner_id: nextOwnerId,
     owner_username: nextOwnerUsername,
+    previous_owner_id: previousOwnerId,
+    previous_owner_username: previousOwnerUsername,
     strength: nextStrength,
     lead_m: Math.round(ownership.lead_m * 100) / 100,
     last_run_at: touchedAt,
+    was_claimed: wasClaimed,
+    was_captured: wasCaptured,
+    was_strengthened: wasStrengthened,
   };
 };
 
@@ -934,6 +1250,9 @@ const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestI
 
   if (runSession.status === 'finished') {
     const run = runSession.run_id ? state.runs.find((entry) => entry.id === runSession.run_id) : null;
+    const changedTiles = Array.from(state.runSessionChunks.entries())
+      .filter(([key]) => key.startsWith(`${runSessionId}:`))
+      .flatMap(([, chunk]) => chunk.changed_tiles || []);
     return jsonResponse({
       run: run || null,
       territory_summary: {
@@ -943,6 +1262,7 @@ const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestI
         total_segments_applied: runSession.total_segments_applied,
         total_segments_rejected: runSession.total_segments_rejected,
       },
+      changed_tiles: changedTiles,
       duplicate: true,
     });
   }
@@ -965,6 +1285,9 @@ const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestI
   const finalAvgPace = Number.isFinite(Number(body.avg_pace)) ? Number(body.avg_pace) : null;
 
   let run: LocalRun | null = null;
+  const changedTiles = Array.from(state.runSessionChunks.entries())
+    .filter(([key]) => key.startsWith(`${runSessionId}:`))
+    .flatMap(([, chunk]) => chunk.changed_tiles || []);
   if (finalDistanceKm > 0.01) {
     const now = new Date().toISOString();
     run = {
@@ -974,6 +1297,12 @@ const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestI
       duration_seconds: finalDurationSeconds,
       avg_pace: finalAvgPace,
       territories_claimed: runSession.territories_claimed,
+      territories_captured: runSession.territories_captured,
+      territories_strengthened: runSession.territories_strengthened,
+      changed_tiles: changedTiles,
+      elevation_gain_m: Number(body.elevation_gain_m || 0),
+      elevation_loss_m: Number(body.elevation_loss_m || 0),
+      route_data: Array.isArray(body.route_data) ? body.route_data : finalPoints,
       started_at:
         typeof body.started_at === 'string' && body.started_at.trim().length > 0
           ? body.started_at
@@ -999,6 +1328,7 @@ const handleRunsLiveFinish = (method: string, auth: AuthPayload, init?: RequestI
       total_segments_applied: runSession.total_segments_applied,
       total_segments_rejected: runSession.total_segments_rejected,
     },
+    changed_tiles: changedTiles,
     duplicate: false,
   });
 };
@@ -1124,6 +1454,11 @@ const handleRaces = (method: string, auth: AuthPayload, url: URL, init?: Request
       opponent_id: String(body.opponent_id),
       race_type: body.race_type || 'distance',
       target_value: Number(body.target_value || 1),
+      time_limit_minutes: Number(body.time_limit_minutes || 45),
+      stake_zones: Number(body.stake_zones || 5),
+      winner_bonus_strength: Number(body.winner_bonus_strength || 3),
+      ready_challenger: false,
+      ready_opponent: false,
       status: 'pending',
       challenger_distance: 0,
       opponent_distance: 0,
@@ -1146,13 +1481,36 @@ const handleRaces = (method: string, auth: AuthPayload, url: URL, init?: Request
         return jsonResponse({ error: 'Not your race to accept' }, 403);
       }
       race.status = 'active';
-      race.started_at = new Date().toISOString();
       return jsonResponse({ race: withRaceUsers(race) });
     }
 
     if (body.action === 'decline') {
       race.status = 'declined';
       return jsonResponse({ race: withRaceUsers(race) });
+    }
+
+    if (body.action === 'ready') {
+      if (race.challenger_id === user.id) {
+        race.ready_challenger = true;
+      } else if (race.opponent_id === user.id) {
+        race.ready_opponent = true;
+      }
+      if (race.ready_challenger && race.ready_opponent && !race.started_at) {
+        race.started_at = new Date().toISOString();
+      }
+      return jsonResponse({ race: withRaceUsers(race) });
+    }
+
+    if (body.action === 'forfeit') {
+      const winnerId = race.challenger_id === user.id ? race.opponent_id : race.challenger_id;
+      race.status = 'finished';
+      race.winner_id = winnerId;
+      race.ended_at = new Date().toISOString();
+      const winner = state.users.get(winnerId);
+      const loser = state.users.get(user.id);
+      if (winner) winner.wins += 1;
+      if (loser) loser.losses += 1;
+      return jsonResponse({ race: withRaceUsers(race), finished: true });
     }
 
     if (body.action === 'update_distance') {
@@ -1258,6 +1616,142 @@ const handleTerritories = (method: string, auth: AuthPayload, url: URL, init?: R
   return jsonResponse({ error: 'Method Not Allowed' }, 405);
 };
 
+const handleTerritoryDetail = (method: string, auth: AuthPayload, url: URL) => {
+  if (method !== 'GET') return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  const user = requireUser(auth);
+  const gridLat = Number(url.searchParams.get('gridLat'));
+  const gridLng = Number(url.searchParams.get('gridLng'));
+  if (!Number.isFinite(gridLat) || !Number.isFinite(gridLng)) {
+    return jsonResponse({ error: 'gridLat and gridLng are required' }, 400);
+  }
+
+  const territory = state.territories.find((t) => t.grid_lat === gridLat && t.grid_lng === gridLng);
+  const contributionMap = state.territoryContributions.get(tileKey(gridLat, gridLng)) || new Map();
+  const contributors = Array.from(contributionMap.entries())
+    .map(([subjectKey, distance_m]) => {
+      const id = subjectKey.split(':').slice(1).join(':');
+      const contributor = state.users.get(id);
+      return {
+        id,
+        username: contributor?.username || contributor?.name || 'Runner',
+        distance_m: Math.round(distance_m),
+        avatar_color: contributor?.avatar_color || colorForUser(id),
+      };
+    })
+    .sort((a, b) => b.distance_m - a.distance_m)
+    .slice(0, 5);
+
+  const ownerId = territory?.owner_id || contributors[0]?.id || null;
+  const ownerContribution = contributors.find((entry) => entry.id === ownerId);
+  const rival = contributors.find((entry) => entry.id !== ownerId) || null;
+  const strength = territory?.strength || (ownerId ? 1 : 0);
+  const daysUntilDecay = Math.max(0, Math.ceil(4 - daysSince(territory?.last_run_at)));
+  const leadM = Math.max(0, (ownerContribution?.distance_m || 0) - (rival?.distance_m || 0));
+  const underThreat = Boolean(rival) && (leadM <= 120 || strength <= 3 || daysUntilDecay <= 1);
+
+  return jsonResponse({
+    zone: {
+      id: territory?.id || null,
+      grid_lat: gridLat,
+      grid_lng: gridLng,
+      label: zoneLabel(gridLat, gridLng),
+      owner_id: ownerId,
+      owner_username: territory?.owner_username || ownerContribution?.username || null,
+      is_owned: user ? ownerId === user.id : false,
+      strength,
+      last_run_at: territory?.last_run_at || null,
+      times_reinforced: strength,
+      lead_m: leadM,
+      days_until_decay: daysUntilDecay,
+      under_threat: underThreat,
+      status: !ownerId ? 'neutral' : underThreat ? 'under_threat' : user && ownerId === user.id ? 'yours' : 'rival',
+      closest_rival: rival,
+      top_contributors: contributors,
+    },
+  });
+};
+
+const handleActivity = (method: string, auth: AuthPayload) => {
+  if (method !== 'GET') return jsonResponse({ error: 'Method Not Allowed' }, 405);
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  const runs = state.runs
+    .filter((run) => run.user_id === user.id)
+    .sort((a, b) => (a.created_at > b.created_at ? -1 : 1))
+    .slice(0, 20);
+  const raceEvents = state.races
+    .filter((race) => race.opponent_id === user.id && race.status === 'pending')
+    .map((race) => {
+      const challenger = state.users.get(race.challenger_id);
+      return {
+        id: `race-${race.id}`,
+        user_id: user.id,
+        actor_id: race.challenger_id,
+        actor_username: challenger?.username || challenger?.name || 'Runner',
+        event_type: 'race_challenge',
+        title: `${challenger?.username || challenger?.name || 'Runner'} challenged you`,
+        body: `${race.target_value} km · winner raids ${race.stake_zones || 5} zones`,
+        grid_lat: null,
+        grid_lng: null,
+        metadata: { race_id: race.id },
+        created_at: race.created_at,
+      };
+    });
+
+  return jsonResponse({
+    events: [
+      ...raceEvents,
+      ...runs.map((run) => ({
+        id: `run-${run.id}`,
+        user_id: user.id,
+        actor_id: user.id,
+        actor_username: user.username || user.name || 'you',
+        event_type: 'run_completed',
+        title: `+${run.territories_claimed || 0} zones on your run`,
+        body: `${run.distance_km.toFixed(1)} km · ${run.territories_captured || 0} captured`,
+        grid_lat: null,
+        grid_lng: null,
+        metadata: { run_id: run.id },
+        created_at: run.started_at,
+      })),
+    ].sort((a, b) => (a.created_at > b.created_at ? -1 : 1)),
+  });
+};
+
+const handleNotificationPreferences = (method: string, auth: AuthPayload, init?: RequestInit) => {
+  const user = requireUser(auth);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const defaults = {
+    zone_stolen: 'always',
+    zone_under_threat: 'daily_max_3',
+    zone_decaying: 'weekly_digest',
+    race_challenge: 'always',
+    rival_rank_move: 'once_a_day',
+    quiet_hours_start: '22:00',
+    quiet_hours_end: '07:00',
+  };
+  const current = localNotificationPreferences.get(user.id) || defaults;
+
+  if (method === 'GET') {
+    return jsonResponse({ preferences: { user_id: user.id, ...current } });
+  }
+
+  if (method === 'PUT') {
+    const body = getBody(init);
+    const next = { ...current };
+    for (const key of Object.keys(defaults)) {
+      if (typeof body[key] === 'string') {
+        next[key] = body[key];
+      }
+    }
+    localNotificationPreferences.set(user.id, next);
+    return jsonResponse({ preferences: { user_id: user.id, ...next } });
+  }
+
+  return jsonResponse({ error: 'Method Not Allowed' }, 405);
+};
+
 export const shouldUseLocalApiFallback = () => {
   // Local API fallback must be an explicit opt-in. We do not silently switch
   // to in-memory state for QA/production-style environments.
@@ -1292,9 +1786,15 @@ export const handleLocalApiRequest = async ({
   if (path === '/api/friends') return handleFriends(method, auth, init);
   if (path === '/api/races') return handleRaces(method, auth, parsed, init);
   if (path === '/api/territories') return handleTerritories(method, auth, parsed, init);
+  if (path === '/api/territories/detail') return handleTerritoryDetail(method, auth, parsed);
+  if (path === '/api/activity') return handleActivity(method, auth);
+  if (path === '/api/notifications/preferences') {
+    return handleNotificationPreferences(method, auth, init);
+  }
   if (path === '/api/leaderboard') {
     const sortBy = parsed.searchParams.get('sort') || 'territories';
-    return jsonResponse({ leaderboard: listLeaderboard(sortBy) });
+    const scope = parsed.searchParams.get('scope') || 'global';
+    return jsonResponse({ leaderboard: listLeaderboard(scope === 'week' ? 'weekly' : sortBy) });
   }
   if (path === '/api/auth/token') {
     const user = requireUser(auth);

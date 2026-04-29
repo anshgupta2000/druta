@@ -27,6 +27,10 @@ import {
   Map,
   Zap,
   Crown,
+  Footprints,
+  Gauge,
+  Shield,
+  Trophy,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { Image } from "expo-image";
@@ -42,6 +46,427 @@ const PROFILE_TABS = [
   { key: "social", label: "Social" },
 ];
 
+const REPLAY_TILES = [
+  { left: "9%", top: "54%", color: COLORS.accent, rotate: "-18deg" },
+  { left: "23%", top: "39%", color: COLORS.accent, rotate: "12deg" },
+  { left: "39%", top: "28%", color: COLORS.green, rotate: "-10deg" },
+  { left: "56%", top: "38%", color: COLORS.orange, rotate: "16deg" },
+  { left: "70%", top: "23%", color: COLORS.accent, rotate: "-12deg" },
+];
+
+function RunReplaySheet({ run, bottomInset, onClose, onViewMap }) {
+  if (!run) return null;
+
+  const claimed = Number(run.territories_claimed || 0);
+  const captured = Number(run.territories_captured || 0);
+  const strengthened = Number(run.territories_strengthened || 0);
+  const dateLabel = run.started_at
+    ? new Date(run.started_at).toLocaleDateString("en-IN", {
+        month: "short",
+        day: "numeric",
+      })
+    : "Run";
+  const routeData = (() => {
+    if (Array.isArray(run.route_data)) return run.route_data;
+    if (typeof run.route_data === "string") {
+      try {
+        const parsed = JSON.parse(run.route_data);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
+  const routePointCount = routeData.length || Math.max(6, claimed + 4);
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 60,
+      }}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={onClose}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0,0,0,0.66)",
+        }}
+      />
+      <Animated.View
+        entering={FadeInDown.duration(260)}
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "#07080C",
+          borderTopLeftRadius: 30,
+          borderTopRightRadius: 30,
+          borderWidth: 1,
+          borderColor: COLORS.borderLight,
+          paddingHorizontal: 20,
+          paddingTop: 16,
+          paddingBottom: bottomInset + 24,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: -16 },
+          shadowOpacity: 0.4,
+          shadowRadius: 28,
+        }}
+      >
+        <View
+          style={{
+            alignSelf: "center",
+            width: 44,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: "rgba(255,255,255,0.18)",
+            marginBottom: 16,
+          }}
+        />
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            marginBottom: 16,
+          }}
+        >
+          <View>
+            <Text
+              style={{
+                color: COLORS.textTertiary,
+                fontSize: 11,
+                fontWeight: "900",
+                letterSpacing: 1.4,
+                textTransform: "uppercase",
+              }}
+            >
+              Run Replay
+            </Text>
+            <Text
+              style={{
+                color: COLORS.white,
+                fontSize: 28,
+                fontWeight: "900",
+                letterSpacing: -0.8,
+                marginTop: 5,
+              }}
+            >
+              +{claimed} zones
+            </Text>
+            <Text
+              style={{
+                color: COLORS.textSecondary,
+                fontSize: 13,
+                fontWeight: "700",
+                marginTop: 3,
+              }}
+            >
+              {dateLabel} / {(run.distance_km || 0).toFixed(2)} km /{" "}
+              {formatDuration(run.duration_seconds || 0)}
+            </Text>
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.82}
+            onPress={onClose}
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              backgroundColor: COLORS.surface,
+              borderWidth: 1,
+              borderColor: COLORS.border,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} color={COLORS.white} />
+          </TouchableOpacity>
+        </View>
+
+        <View
+          style={{
+            height: 188,
+            borderRadius: 24,
+            backgroundColor: "#020711",
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: COLORS.borderAccent,
+            marginBottom: 16,
+          }}
+        >
+          {Array.from({ length: 7 }).map((_, index) => (
+            <View
+              key={`replay-grid-${index}`}
+              style={{
+                position: "absolute",
+                left: index * 56,
+                top: 0,
+                bottom: 0,
+                width: 1,
+                backgroundColor: "rgba(45,122,255,0.07)",
+              }}
+            />
+          ))}
+          {Array.from({ length: 6 }).map((_, index) => (
+            <View
+              key={`replay-row-${index}`}
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: 24 + index * 28,
+                height: 1,
+                backgroundColor: "rgba(255,255,255,0.04)",
+              }}
+            />
+          ))}
+          {REPLAY_TILES.map((tile, index) => (
+            <View
+              key={`replay-tile-${index}`}
+              style={{
+                position: "absolute",
+                left: tile.left,
+                top: tile.top,
+                width: 72,
+                height: 42,
+                borderRadius: 16,
+                backgroundColor: `${tile.color}${index < claimed ? "AA" : "30"}`,
+                borderWidth: 1,
+                borderColor: `${tile.color}66`,
+                transform: [{ rotate: tile.rotate }],
+              }}
+            />
+          ))}
+          <View
+            style={{
+              position: "absolute",
+              left: "12%",
+              right: "12%",
+              top: "60%",
+              height: 3,
+              borderRadius: 2,
+              backgroundColor: COLORS.accent,
+              transform: [{ rotate: "-18deg" }],
+              shadowColor: COLORS.accent,
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.78,
+              shadowRadius: 16,
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              left: "36%",
+              right: "22%",
+              top: "42%",
+              height: 3,
+              borderRadius: 2,
+              backgroundColor: COLORS.green,
+              transform: [{ rotate: "14deg" }],
+              shadowColor: COLORS.green,
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.62,
+              shadowRadius: 14,
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              left: "70%",
+              top: "22%",
+              width: 18,
+              height: 18,
+              borderRadius: 9,
+              backgroundColor: COLORS.orange,
+              borderWidth: 2,
+              borderColor: COLORS.white,
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              left: 14,
+              bottom: 12,
+              right: 14,
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Text
+              style={{
+                color: COLORS.textSecondary,
+                fontSize: 11,
+                fontWeight: "800",
+              }}
+            >
+              {routePointCount} route points
+            </Text>
+            <Text
+              style={{
+                color: COLORS.accent,
+                fontSize: 11,
+                fontWeight: "900",
+              }}
+            >
+              claimed tiles pulse in order
+            </Text>
+          </View>
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 10, marginBottom: 14 }}>
+          {[
+            ["Captured", captured],
+            ["Reinforced", strengthened],
+            ["Avg pace", run.avg_pace || "--"],
+          ].map(([label, value]) => (
+            <View
+              key={label}
+              style={{
+                flex: 1,
+                backgroundColor: COLORS.surface,
+                borderRadius: 17,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+                padding: 13,
+              }}
+            >
+              <Text
+                style={{
+                  color: COLORS.textTertiary,
+                  fontSize: 10,
+                  fontWeight: "800",
+                  textTransform: "uppercase",
+                }}
+              >
+                {label}
+              </Text>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                style={{
+                  color: COLORS.white,
+                  fontSize: 20,
+                  fontWeight: "900",
+                  marginTop: 7,
+                }}
+              >
+                {value}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <View
+          style={{
+            backgroundColor: COLORS.surface,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            padding: 14,
+            marginBottom: 14,
+          }}
+        >
+          {[
+            ["Start", "GPS locked and route began"],
+            ["Claim", `${claimed} zones changed hands`],
+            ["Payoff", captured ? `${captured} taken from rivals` : "territory strengthened"],
+          ].map(([label, value], index) => (
+            <View
+              key={label}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                paddingVertical: 6,
+              }}
+            >
+              <View
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 12,
+                  backgroundColor:
+                    index === 1 ? COLORS.accentMuted : COLORS.surfaceElevated,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 10,
+                }}
+              >
+                {index === 0 ? (
+                  <Route size={13} color={COLORS.textSecondary} />
+                ) : index === 1 ? (
+                  <Zap size={13} color={COLORS.accent} />
+                ) : (
+                  <Trophy size={13} color={COLORS.gold} />
+                )}
+              </View>
+              <Text
+                style={{
+                  color: COLORS.white,
+                  fontSize: 13,
+                  fontWeight: "800",
+                  width: 68,
+                }}
+              >
+                {label}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: COLORS.textSecondary,
+                  fontSize: 13,
+                  fontWeight: "600",
+                  flex: 1,
+                }}
+              >
+                {value}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        <TouchableOpacity
+          activeOpacity={0.88}
+          onPress={onViewMap}
+          style={{
+            height: 54,
+            borderRadius: 18,
+            backgroundColor: COLORS.accent,
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 9,
+          }}
+        >
+          <Map size={18} color={COLORS.black} />
+          <Text
+            style={{
+              color: COLORS.black,
+              fontSize: 15,
+              fontWeight: "900",
+            }}
+          >
+            View Territory Map
+          </Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -54,6 +479,7 @@ export default function ProfileScreen() {
   const [showEditUsername, setShowEditUsername] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [activeTab, setActiveTab] = useState("progress");
+  const [selectedReplayRun, setSelectedReplayRun] = useState(null);
 
   const { data: profileData } = useQuery({
     queryKey: ["profile"],
@@ -105,6 +531,22 @@ export default function ProfileScreen() {
   const displayName = preferredName || profile?.username || "Runner";
   const displayHandle = profile?.username ? `@${profile.username}` : null;
   const profileInitial = (displayName || "?")[0].toUpperCase();
+  const avatarConfig = useMemo(() => {
+    try {
+      return profile?.avatar_code ? JSON.parse(profile.avatar_code) : null;
+    } catch {
+      return null;
+    }
+  }, [profile?.avatar_code]);
+  const ProfileAvatarIcon = useMemo(() => {
+    const iconMap = {
+      sprinter: Zap,
+      sentinel: Shield,
+      pathfinder: Footprints,
+      raider: Gauge,
+    };
+    return iconMap[avatarConfig?.base] || null;
+  }, [avatarConfig?.base]);
 
   const fallbackCoreStats = useMemo(() => {
     const totalClaimed = runs.reduce(
@@ -150,7 +592,11 @@ export default function ProfileScreen() {
     );
   }, [territoryImpactRuns]);
 
-  const hasAvatar = !!(profile?.avatar_url || profile?.avatar_thumbnail_url);
+  const hasAvatar = !!(
+    profile?.avatar_url ||
+    profile?.avatar_thumbnail_url ||
+    profile?.avatar_code
+  );
   const outfitLoadout = profile?.outfit_loadout || {};
 
   const updateProfile = useMutation({
@@ -376,6 +822,8 @@ export default function ProfileScreen() {
                 style={{ width: 80, height: 80, borderRadius: 40 }}
                 contentFit="cover"
               />
+            ) : ProfileAvatarIcon ? (
+              <ProfileAvatarIcon size={34} color={COLORS.black} />
             ) : (
               <Text
                 style={{
@@ -999,15 +1447,22 @@ export default function ProfileScreen() {
                             shadowOffset: { width: 0, height: 0 },
                           }}
                         >
-                          <Text
-                            style={{
-                              fontSize: 36,
-                              fontWeight: "800",
-                              color: COLORS.black,
-                            }}
-                          >
-                            {profileInitial}
-                          </Text>
+                          {ProfileAvatarIcon ? (
+                            <ProfileAvatarIcon
+                              size={38}
+                              color={COLORS.black}
+                            />
+                          ) : (
+                            <Text
+                              style={{
+                                fontSize: 36,
+                                fontWeight: "800",
+                                color: COLORS.black,
+                              }}
+                            >
+                              {profileInitial}
+                            </Text>
+                          )}
                         </View>
                         <Text
                           style={{
@@ -1016,7 +1471,7 @@ export default function ProfileScreen() {
                             marginTop: 10,
                           }}
                         >
-                          3D preview available on device
+                          Saved to your leaderboard identity
                         </Text>
                       </View>
                     )}
@@ -1636,15 +2091,19 @@ export default function ProfileScreen() {
                 <Animated.View
                   key={run.id}
                   entering={FadeInDown.delay(index * 30).duration(250)}
-                  style={{
-                    backgroundColor: COLORS.surface,
-                    borderRadius: 16,
-                    padding: 16,
-                    marginBottom: 8,
-                    borderWidth: 1,
-                    borderColor: COLORS.border,
-                  }}
+                  style={{ marginBottom: 8 }}
                 >
+                  <TouchableOpacity
+                    activeOpacity={0.84}
+                    onPress={() => setSelectedReplayRun(run)}
+                    style={{
+                      backgroundColor: COLORS.surface,
+                      borderRadius: 16,
+                      padding: 16,
+                      borderWidth: 1,
+                      borderColor: COLORS.border,
+                    }}
+                  >
                   <View
                     style={{
                       flexDirection: "row",
@@ -1716,12 +2175,22 @@ export default function ProfileScreen() {
                       </Text>
                     </View>
                   </View>
+                  </TouchableOpacity>
                 </Animated.View>
               );
             })}
           </View>
         )}
       </ScrollView>
+      <RunReplaySheet
+        run={selectedReplayRun}
+        bottomInset={insets.bottom}
+        onClose={() => setSelectedReplayRun(null)}
+        onViewMap={() => {
+          setSelectedReplayRun(null);
+          router.push("/(tabs)");
+        }}
+      />
     </View>
   );
 }

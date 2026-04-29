@@ -1,56 +1,69 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
-import { Trophy, Map, Zap, Medal, Crown } from "lucide-react-native";
+import { Trophy, Map, Medal, Crown, Users, Globe2, CalendarDays, Swords } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS } from "@/constants/theme";
 import useUser from "@/utils/auth/useUser";
 
 const TAB_META = {
-  territories: {
-    key: "territories",
-    label: "Zones",
+  city: {
+    key: "city",
+    label: "City",
     unit: "zones",
     accent: COLORS.accent,
     glow: "rgba(45,122,255,0.26)",
     borderGlow: "rgba(45,122,255,0.32)",
     rowTint: "rgba(45,122,255,0.12)",
-    description: "Own more tiles to climb.",
+    description: "Own the city grid to climb.",
     icon: Map,
     getValue: (item) => Number(item?.territories_owned || 0),
   },
-  distance: {
-    key: "distance",
-    label: "Distance",
-    unit: "km",
+  friends: {
+    key: "friends",
+    label: "Friends",
+    unit: "zones",
     accent: COLORS.cyan,
     glow: "rgba(0,212,255,0.24)",
     borderGlow: "rgba(0,212,255,0.32)",
     rowTint: "rgba(0,212,255,0.1)",
-    description: "Weekly mileage leaders.",
-    icon: Zap,
-    getValue: (item) => Number(item?.total_distance_km || 0),
+    description: "Rivals you can actually catch.",
+    icon: Users,
+    getValue: (item) => Number(item?.territories_owned || 0),
   },
-  wins: {
-    key: "wins",
-    label: "Wins",
-    unit: "wins",
+  week: {
+    key: "week",
+    label: "Week",
+    unit: "gained",
     accent: COLORS.orange,
     glow: "rgba(255,107,53,0.24)",
     borderGlow: "rgba(255,107,53,0.32)",
     rowTint: "rgba(255,107,53,0.1)",
-    description: "Head-to-head dominance.",
-    icon: Trophy,
-    getValue: (item) => Number(item?.wins || 0),
+    description: "Fresh war, reset every Sunday.",
+    icon: CalendarDays,
+    getValue: (item) => Number(item?.weekly_zones || 0),
+  },
+  global: {
+    key: "global",
+    label: "Global",
+    unit: "zones",
+    accent: COLORS.purple,
+    glow: "rgba(139,92,246,0.22)",
+    borderGlow: "rgba(139,92,246,0.3)",
+    rowTint: "rgba(139,92,246,0.1)",
+    description: "The full empire board.",
+    icon: Globe2,
+    getValue: (item) => Number(item?.territories_owned || 0),
   },
 };
 
@@ -84,19 +97,30 @@ const getMedalColor = (rank) => {
 export default function LeaderboardScreen() {
   const insets = useSafeAreaInsets();
   const { data: user } = useUser();
-  const [activeTab, setActiveTab] = useState("territories");
+  const [activeTab, setActiveTab] = useState("city");
+  const [selectedRival, setSelectedRival] = useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["leaderboard", activeTab],
     queryFn: async () => {
-      const res = await fetch(`/api/leaderboard?sort=${activeTab}`);
+      const scope = activeTab === "week" ? "week" : "global";
+      const res = await fetch(`/api/leaderboard?scope=${scope}&sort=territories`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const { data: weeklyData } = useQuery({
+    queryKey: ["leaderboard", "weekly-war"],
+    queryFn: async () => {
+      const res = await fetch("/api/leaderboard?scope=week&sort=territories");
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
   });
 
   const leaderboard = data?.leaderboard || [];
-  const activeMeta = TAB_META[activeTab] || TAB_META.territories;
+  const activeMeta = TAB_META[activeTab] || TAB_META.city;
 
   const myRank = useMemo(() => {
     if (!user?.id) return null;
@@ -108,7 +132,6 @@ export default function LeaderboardScreen() {
 
   const formatStatValue = (item) => {
     const value = activeMeta.getValue(item);
-    if (activeTab === "distance") return value.toFixed(1);
     return String(Math.round(value));
   };
 
@@ -116,6 +139,43 @@ export default function LeaderboardScreen() {
     item: leaderboard[index] || null,
     rank: index + 1,
   }));
+
+  const weeklyLeaders = weeklyData?.leaderboard || [];
+  const weeklyTop = weeklyLeaders[0] || null;
+  const weeklyMeIndex = user?.id
+    ? weeklyLeaders.findIndex((entry) => entry.id === user.id)
+    : -1;
+  const weeklyMe = weeklyMeIndex >= 0 ? weeklyLeaders[weeklyMeIndex] : null;
+  const rivalCard =
+    selectedRival ||
+    leaderboard.find((entry) => entry.id !== user?.id) ||
+    leaderboard[0] ||
+    null;
+
+  const challengeRival = useCallback(
+    async (rival) => {
+      if (!rival || rival.id === user?.id) return;
+      try {
+        const res = await fetch("/api/races", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            opponent_id: rival.id,
+            race_type: "distance",
+            target_value: 5,
+            time_limit_minutes: 45,
+            stake_zones: 5,
+            winner_bonus_strength: 3,
+          }),
+        });
+        if (!res.ok) throw new Error("Challenge failed");
+        Alert.alert("Challenge sent", `${getDisplayName(rival)} will see a 5 km race invite.`);
+      } catch (err) {
+        Alert.alert("Could not challenge", "Try again after adding them as a friend.");
+      }
+    },
+    [user?.id],
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.black }}>
@@ -243,7 +303,10 @@ export default function LeaderboardScreen() {
           return (
             <TouchableOpacity
               key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => {
+                setActiveTab(tab.key);
+                setSelectedRival(null);
+              }}
               style={{ flex: 1 }}
             >
               {isActive ? (
@@ -304,11 +367,162 @@ export default function LeaderboardScreen() {
         })}
       </View>
 
+      <View style={{ paddingHorizontal: 24, marginTop: 14 }}>
+        <LinearGradient
+          colors={["rgba(255,202,40,0.14)", "rgba(12,12,14,0.96)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: "rgba(255,202,40,0.2)",
+            padding: 14,
+          }}
+        >
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={{ color: COLORS.gold, fontSize: 11, fontWeight: "900", letterSpacing: 1.2 }}>
+                WEEKLY WAR
+              </Text>
+              <Text style={{ color: COLORS.white, fontSize: 15, fontWeight: "800", marginTop: 5 }}>
+                Most zones gained wins 100 Druta Coins
+              </Text>
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={{ color: COLORS.textTertiary, fontSize: 11, fontWeight: "700" }}>
+                Leader
+              </Text>
+              <Text style={{ color: COLORS.gold, fontSize: 15, fontWeight: "900", marginTop: 3 }}>
+                {weeklyTop ? `+${weeklyTop.weekly_zones || 0}` : "+0"}
+              </Text>
+            </View>
+          </View>
+          <View style={{ height: 6, borderRadius: 4, backgroundColor: COLORS.surfaceElevated, overflow: "hidden", marginTop: 12 }}>
+            <View
+              style={{
+                height: "100%",
+                width: `${Math.min(100, Math.max(8, ((weeklyMe?.weekly_zones || 0) / Math.max(1, weeklyTop?.weekly_zones || 1)) * 100))}%`,
+                backgroundColor: COLORS.gold,
+              }}
+            />
+          </View>
+          <Text style={{ color: COLORS.textTertiary, fontSize: 11, fontWeight: "700", marginTop: 8 }}>
+            {weeklyMeIndex >= 0
+              ? `You are #${weeklyMeIndex + 1} this week with +${weeklyMe?.weekly_zones || 0}`
+              : "Run this week to enter the war"}
+          </Text>
+        </LinearGradient>
+      </View>
+
       <ScrollView
         style={{ flex: 1, marginTop: 18 }}
         contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
       >
+        {rivalCard && rivalCard.id !== user?.id && (
+          <Animated.View entering={FadeInDown.duration(260)} style={{ marginBottom: 18 }}>
+            <View
+              style={{
+                borderRadius: 22,
+                padding: 18,
+                backgroundColor: COLORS.surface,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <View
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 28,
+                    backgroundColor: rivalCard.avatar_color || activeMeta.accent,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: COLORS.black, fontSize: 22, fontWeight: "900" }}>
+                    {getInitial(rivalCard)}
+                  </Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: COLORS.white, fontSize: 20, fontWeight: "900" }}>
+                    {getDisplayName(rivalCard)}
+                  </Text>
+                  <Text style={{ color: COLORS.textTertiary, fontSize: 12, fontWeight: "700", marginTop: 3 }}>
+                    Rival target · {rivalCard.wins || 0}W {rivalCard.losses || 0}L
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={{ color: activeMeta.accent, fontSize: 24, fontWeight: "900" }}>
+                    {formatStatValue(rivalCard)}
+                  </Text>
+                  <Text style={{ color: COLORS.textTertiary, fontSize: 10, fontWeight: "800" }}>
+                    {activeMeta.unit}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+                <View
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    padding: 12,
+                    backgroundColor: COLORS.surfaceElevated,
+                    borderWidth: 1,
+                    borderColor: COLORS.border,
+                  }}
+                >
+                  <Text style={{ color: COLORS.textTertiary, fontSize: 10, fontWeight: "900" }}>
+                    SHARED ZONES
+                  </Text>
+                  <Text style={{ color: COLORS.orange, fontSize: 18, fontWeight: "900", marginTop: 4 }}>
+                    {Math.max(1, Math.min(9, Math.round((rivalCard.territories_owned || 1) / 8)))} contested
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    padding: 12,
+                    backgroundColor: COLORS.surfaceElevated,
+                    borderWidth: 1,
+                    borderColor: COLORS.border,
+                  }}
+                >
+                  <Text style={{ color: COLORS.textTertiary, fontSize: 10, fontWeight: "900" }}>
+                    GAP
+                  </Text>
+                  <Text style={{ color: COLORS.white, fontSize: 18, fontWeight: "900", marginTop: 4 }}>
+                    {Math.abs((rivalCard.territories_owned || 0) - (myEntry?.territories_owned || 0))} zones
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => challengeRival(rivalCard)}
+                activeOpacity={0.88}
+                style={{
+                  minHeight: 54,
+                  marginTop: 16,
+                  borderRadius: 16,
+                  backgroundColor: COLORS.orange,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 8,
+                }}
+              >
+                <Swords size={18} color={COLORS.white} />
+                <Text style={{ color: COLORS.white, fontSize: 16, fontWeight: "900" }}>
+                  Challenge to Race
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )}
+
         {isLoading && (
           <View style={{ alignItems: "center", marginTop: 48 }}>
             <ActivityIndicator color={activeMeta.accent} size="large" />
@@ -340,6 +554,13 @@ export default function LeaderboardScreen() {
                   entering={FadeInDown.delay(slotIndex * 90).duration(360)}
                   style={{ flex: isChampion ? 1.15 : 1, alignItems: "center" }}
                 >
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (!isMe) setSelectedRival(item);
+                    }}
+                    activeOpacity={0.86}
+                    style={{ width: "100%", alignItems: "center" }}
+                  >
                   <View style={{ alignItems: "center", marginBottom: 10 }}>
                     <View
                       style={{
@@ -455,6 +676,7 @@ export default function LeaderboardScreen() {
                       {activeMeta.unit}
                     </Text>
                   </LinearGradient>
+                  </TouchableOpacity>
                 </Animated.View>
               );
             })}
@@ -486,7 +708,11 @@ export default function LeaderboardScreen() {
               entering={FadeInDown.delay((index + 3) * 30).duration(280)}
               style={{ marginBottom: 8 }}
             >
-              <View
+              <TouchableOpacity
+                onPress={() => {
+                  if (!isMe) setSelectedRival(item);
+                }}
+                activeOpacity={0.82}
                 style={{
                   borderRadius: 16,
                   padding: 14,
@@ -590,7 +816,7 @@ export default function LeaderboardScreen() {
                     {activeMeta.unit}
                   </Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             </Animated.View>
           );
         })}
