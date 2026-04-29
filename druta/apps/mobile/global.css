@@ -1,5 +1,52 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
 
+html,
+body,
+#root {
+  background: #020304;
+}
+
 body {
   font-family: "Inter", sans-serif !important;
+  margin: 0;
+}
+
+@media (min-width: 700px) {
+  html,
+  body {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(45, 122, 255, 0.16), transparent 34%),
+      radial-gradient(circle at 82% 18%, rgba(255, 107, 53, 0.08), transparent 22%),
+      #020304;
+  }
+
+  body {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  #root {
+    background: #000000;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 34px;
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(45, 122, 255, 0.06);
+    flex: 0 0 auto !important;
+    height: min(920px, calc(100vh - 36px)) !important;
+    max-height: 920px;
+    max-width: calc(100vw - 36px);
+    overflow: hidden;
+    width: min(430px, calc(100vw - 36px)) !important;
+  }
+}
+
+@media (max-width: 699px) {
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+  }
 }

@@ -37,6 +37,20 @@ import { useRunTracker } from "@/utils/run/useRunTracker";
 const isWeb = Platform.OS === "web";
 const isIOS = Platform.OS === "ios";
 const AUTO_FOLLOW_MIN_MOVE_METERS = 3;
+const MAP_GRID_ROWS = Array.from({ length: 9 });
+const MAP_GRID_COLS = Array.from({ length: 7 });
+const TERRITORY_PREVIEW_TILES = [
+  { left: "12%", top: "58%", size: 58, color: COLORS.accent, opacity: 0.18 },
+  { left: "30%", top: "48%", size: 68, color: COLORS.cyan, opacity: 0.12 },
+  { left: "52%", top: "56%", size: 74, color: COLORS.accent, opacity: 0.2 },
+  { left: "68%", top: "42%", size: 82, color: COLORS.orange, opacity: 0.13 },
+];
+const CONTOUR_LINES = [
+  { left: "8%", top: "35%", width: 230, rotate: "-13deg" },
+  { left: "2%", top: "48%", width: 300, rotate: "-10deg" },
+  { left: "18%", top: "63%", width: 260, rotate: "-8deg" },
+  { left: "36%", top: "77%", width: 190, rotate: "-14deg" },
+];
 
 const darkGoogleMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#08080A" }] },
@@ -154,7 +168,7 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
       style={{ flex: 1 }}
       contentContainerStyle={{
         paddingHorizontal: 20,
-        paddingTop: 16,
+        paddingTop: 12,
         paddingBottom: 380,
       }}
       showsVerticalScrollIndicator={false}
@@ -162,63 +176,179 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
       <Animated.View
         entering={FadeInDown.duration(500)}
         style={{
-          backgroundColor: COLORS.surface,
-          borderRadius: 24,
-          padding: 28,
+          backgroundColor: "#05070B",
+          borderRadius: 30,
+          padding: 18,
           borderWidth: 1,
-          borderColor: COLORS.borderAccent,
-          alignItems: "center",
-          marginBottom: 24,
+          borderColor: "rgba(45,122,255,0.34)",
+          minHeight: 318,
+          marginBottom: 18,
+          overflow: "hidden",
+          shadowColor: COLORS.accent,
+          shadowOffset: { width: 0, height: 24 },
+          shadowOpacity: 0.16,
+          shadowRadius: 34,
         }}
       >
         <View
           style={{
-            width: 72,
-            height: 72,
-            borderRadius: 36,
-            backgroundColor: COLORS.accentMuted,
-            alignItems: "center",
-            justifyContent: "center",
-            marginBottom: 16,
-            borderWidth: 1,
-            borderColor: COLORS.accentGlow,
+            position: "absolute",
+            left: -52,
+            right: -52,
+            top: 96,
+            bottom: -14,
+            backgroundColor: "rgba(45,122,255,0.025)",
           }}
         >
-          <Navigation size={30} color={COLORS.accent} />
+          {MAP_GRID_ROWS.map((_, i) => (
+            <View
+              key={`map-row-${i}`}
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: i * 30,
+                height: 1,
+                backgroundColor: i % 2 ? "rgba(45,122,255,0.08)" : "rgba(255,255,255,0.04)",
+              }}
+            />
+          ))}
+          {MAP_GRID_COLS.map((_, i) => (
+            <View
+              key={`map-col-${i}`}
+              style={{
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: i * 66,
+                width: 1,
+                backgroundColor: "rgba(255,255,255,0.05)",
+              }}
+            />
+          ))}
         </View>
-        <Text
+        {CONTOUR_LINES.map((line, i) => (
+          <View
+            key={`contour-${i}`}
+            style={{
+              position: "absolute",
+              left: line.left,
+              top: line.top,
+              width: line.width,
+              height: 1,
+              borderTopWidth: 1,
+              borderColor: "rgba(255,255,255,0.065)",
+              borderStyle: "dashed",
+              transform: [{ rotate: line.rotate }],
+            }}
+          />
+        ))}
+        {TERRITORY_PREVIEW_TILES.map((tile, i) => (
+          <View
+            key={`preview-tile-${i}`}
+            style={{
+              position: "absolute",
+              left: tile.left,
+              top: tile.top,
+              width: tile.size,
+              height: tile.size * 0.72,
+              borderRadius: 16,
+              backgroundColor: `${tile.color}${Math.round(tile.opacity * 255)
+                .toString(16)
+                .padStart(2, "0")}`,
+              borderWidth: 1,
+              borderColor: `${tile.color}4A`,
+              transform: [{ rotate: i % 2 ? "9deg" : "-7deg" }],
+            }}
+          />
+        ))}
+        <View
           style={{
-            color: COLORS.textPrimary,
-            fontSize: 20,
-            fontWeight: "700",
-            letterSpacing: -0.3,
+            position: "absolute",
+            left: "46%",
+            top: "62%",
+            width: 86,
+            height: 86,
+            borderRadius: 43,
+            borderWidth: 1,
+            borderColor: "rgba(255,107,53,0.2)",
+            backgroundColor: "rgba(255,107,53,0.035)",
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            left: "53%",
+            top: "69%",
+            width: 13,
+            height: 13,
+            borderRadius: 7,
+            backgroundColor: COLORS.orange,
+            borderWidth: 2,
+            borderColor: "rgba(255,255,255,0.82)",
+            shadowColor: COLORS.orange,
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: 0.9,
+            shadowRadius: 16,
+          }}
+        />
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
           }}
         >
-          {title}
-        </Text>
-        <Text
-          style={{
-            color: COLORS.textTertiary,
-            fontSize: 13,
-            marginTop: 8,
-            textAlign: "center",
-            lineHeight: 20,
-          }}
-        >
-          {subtitle}
-        </Text>
+          <View style={{ flex: 1, paddingRight: 18 }}>
+            <Text
+              style={{
+                color: COLORS.textPrimary,
+                fontSize: 22,
+                fontWeight: "800",
+                letterSpacing: -0.5,
+              }}
+            >
+              {title}
+            </Text>
+            <Text
+              style={{
+                color: COLORS.textTertiary,
+                fontSize: 13,
+                marginTop: 8,
+                lineHeight: 19,
+              }}
+            >
+              {subtitle}
+            </Text>
+          </View>
+          <View
+            style={{
+              width: 54,
+              height: 54,
+              borderRadius: 20,
+              backgroundColor: "rgba(45,122,255,0.14)",
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: "rgba(45,122,255,0.24)",
+            }}
+          >
+            <Navigation size={25} color={COLORS.accent} />
+          </View>
+        </View>
         {location && (
           <View
             style={{
               flexDirection: "row",
               alignItems: "center",
-              marginTop: 14,
-              backgroundColor: COLORS.card,
+              alignSelf: "flex-start",
+              marginTop: 136,
+              backgroundColor: "rgba(0,0,0,0.44)",
               paddingHorizontal: 14,
-              paddingVertical: 7,
+              paddingVertical: 8,
               borderRadius: 20,
               borderWidth: 1,
-              borderColor: COLORS.border,
+              borderColor: "rgba(255,255,255,0.08)",
             }}
           >
             <MapPin size={12} color={COLORS.accent} />
@@ -252,31 +382,51 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
         <Animated.View
           entering={FadeInDown.delay(100).duration(300)}
           style={{
-            backgroundColor: COLORS.surface,
-            borderRadius: 20,
-            padding: 24,
+            backgroundColor: "rgba(255,255,255,0.035)",
+            borderRadius: 18,
+            padding: 18,
+            flexDirection: "row",
             alignItems: "center",
             borderWidth: 1,
             borderColor: COLORS.border,
             marginBottom: 20,
           }}
         >
-          <Hexagon size={36} color={COLORS.textDisabled} />
-          <Text
+          <View
             style={{
-              color: COLORS.textSecondary,
-              fontSize: 14,
-              fontWeight: "600",
-              marginTop: 10,
+              width: 44,
+              height: 44,
+              borderRadius: 15,
+              backgroundColor: COLORS.card,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: COLORS.border,
+              marginRight: 14,
             }}
           >
-            No territories claimed
-          </Text>
-          <Text
-            style={{ color: COLORS.textTertiary, fontSize: 12, marginTop: 4 }}
-          >
-            Start running to conquer your first zone
-          </Text>
+            <Hexagon size={23} color={COLORS.textDisabled} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                color: COLORS.textSecondary,
+                fontSize: 14,
+                fontWeight: "700",
+              }}
+            >
+              No territories claimed
+            </Text>
+            <Text
+              style={{
+                color: COLORS.textTertiary,
+                fontSize: 12,
+                marginTop: 4,
+              }}
+            >
+              Start running to conquer your first zone
+            </Text>
+          </View>
         </Animated.View>
       )}
       {myTerritories.map((territory, idx) => (
@@ -467,11 +617,37 @@ function WebMapFallback({ territories, user, location, title, subtitle }) {
 
 function MetricCell({ label, value, valueColor = COLORS.white, unit }) {
   return (
-    <View style={{ flex: 1, alignItems: "center" }}>
+    <View
+      style={{
+        flex: 1,
+        alignItems: "center",
+        backgroundColor: "rgba(255,255,255,0.035)",
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.06)",
+        paddingVertical: 10,
+        minHeight: 76,
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 18,
+          right: 18,
+          height: 2,
+          borderRadius: 1,
+          backgroundColor:
+            valueColor === COLORS.white
+              ? "rgba(255,255,255,0.12)"
+              : `${valueColor}99`,
+        }}
+      />
       <Text
         style={{
           color: valueColor,
-          fontSize: 34,
+          fontSize: 29,
           fontWeight: "800",
           letterSpacing: -1.2,
         }}
@@ -481,10 +657,11 @@ function MetricCell({ label, value, valueColor = COLORS.white, unit }) {
       <Text
         style={{
           color: COLORS.textTertiary,
-          fontSize: 12,
+          fontSize: 10,
           fontWeight: "700",
-          letterSpacing: 0.6,
+          letterSpacing: 0.7,
           marginTop: 2,
+          textAlign: "center",
         }}
       >
         {label}
@@ -493,7 +670,7 @@ function MetricCell({ label, value, valueColor = COLORS.white, unit }) {
         <Text
           style={{
             color: COLORS.textDisabled,
-            fontSize: 11,
+            fontSize: 10,
             marginTop: 2,
             fontWeight: "600",
             letterSpacing: 0.4,
@@ -513,6 +690,8 @@ function TrackingDock({
   paceDisplay,
   distance,
   speedKmh,
+  elevationGainM,
+  elevationLossM,
   currentAccuracy,
   gpsLabel,
   onStartRun,
@@ -531,8 +710,8 @@ function TrackingDock({
     <View
       style={{
         position: "absolute",
-        left: 14,
-        right: 14,
+        left: 12,
+        right: 12,
         bottom: bottomInset + 66,
         zIndex: 20,
       }}
@@ -541,53 +720,93 @@ function TrackingDock({
       <Animated.View
         entering={FadeInDown.duration(350)}
         style={{
-          backgroundColor: "rgba(5,5,8,0.92)",
-          borderRadius: 26,
+          backgroundColor: "rgba(7,10,16,0.97)",
+          borderRadius: 30,
           paddingTop: 14,
-          paddingBottom: 18,
-          paddingHorizontal: 14,
+          paddingBottom: 14,
+          paddingHorizontal: 12,
           borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.08)",
+          borderColor: "rgba(255,255,255,0.12)",
+          overflow: "hidden",
           shadowColor: "#000",
-          shadowOffset: { width: 0, height: 10 },
-          shadowOpacity: 0.32,
-          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 18 },
+          shadowOpacity: 0.42,
+          shadowRadius: 32,
         }}
       >
         <View
           style={{
-            alignSelf: "center",
-            backgroundColor: isRunning ? "rgba(45,122,255,0.18)" : COLORS.surface,
-            borderRadius: 999,
-            borderWidth: 1,
-            borderColor: isRunning ? COLORS.borderAccent : COLORS.border,
-            paddingHorizontal: 14,
-            paddingVertical: 6,
-            marginBottom: 14,
+            position: "absolute",
+            left: 22,
+            right: 22,
+            top: 0,
+            height: 2,
+            backgroundColor: isRunning
+              ? COLORS.green
+              : "rgba(45,122,255,0.68)",
+            borderRadius: 1,
+          }}
+        />
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 10,
+            gap: 10,
           }}
         >
-          <Text
+          <View
             style={{
-              color: isRunning ? COLORS.accent : COLORS.textSecondary,
-              fontSize: 11,
-              fontWeight: "700",
-              letterSpacing: 1.3,
-              textTransform: "uppercase",
+              flexDirection: "row",
+              alignItems: "center",
+              backgroundColor: isRunning
+                ? "rgba(45,122,255,0.18)"
+                : COLORS.surface,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: isRunning ? COLORS.borderAccent : COLORS.border,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
             }}
           >
-            {gpsLabel}
+            <View
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: isRunning ? COLORS.green : COLORS.accent,
+                marginRight: 7,
+              }}
+            />
+            <Text
+              style={{
+                color: isRunning ? COLORS.accent : COLORS.textSecondary,
+                fontSize: 10,
+                fontWeight: "800",
+                letterSpacing: 1.2,
+                textTransform: "uppercase",
+              }}
+            >
+              {gpsLabel}
+            </Text>
+          </View>
+          <Text
+            style={{
+              color: COLORS.textTertiary,
+              fontSize: 11,
+              fontWeight: "700",
+            }}
+          >
+            {accuracyLabel} accuracy
           </Text>
         </View>
 
         <View
           style={{
-            backgroundColor: "rgba(255,255,255,0.02)",
-            borderRadius: 18,
-            borderWidth: 1,
-            borderColor: COLORS.border,
-            paddingVertical: 14,
             flexDirection: "row",
-            marginBottom: 14,
+            gap: 8,
+            marginBottom: 10,
           }}
         >
           <MetricCell label="Time" value={formatDuration(duration)} />
@@ -605,13 +824,14 @@ function TrackingDock({
             flexDirection: "row",
             justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: 14,
+            marginBottom: 10,
+            gap: 8,
           }}
         >
           <Text
             style={{
               color: COLORS.textSecondary,
-              fontSize: 14,
+              fontSize: 12,
               fontWeight: "600",
               letterSpacing: 0.2,
             }}
@@ -621,11 +841,13 @@ function TrackingDock({
           <Text
             style={{
               color: COLORS.textTertiary,
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: "600",
+              textAlign: "right",
             }}
           >
-            Accuracy {accuracyLabel}
+            Elev +{Math.round(elevationGainM)}m / -
+            {Math.round(elevationLossM)}m
           </Text>
         </View>
 
@@ -633,7 +855,7 @@ function TrackingDock({
           style={{
             alignItems: "center",
             position: "relative",
-            minHeight: 112,
+            minHeight: 94,
             width: "100%",
           }}
         >
@@ -643,14 +865,18 @@ function TrackingDock({
                 onPress={onStartRun}
                 activeOpacity={0.85}
                 style={{
-                  width: 84,
-                  height: 84,
-                  borderRadius: 42,
+                  width: 74,
+                  height: 74,
+                  borderRadius: 37,
                   backgroundColor: COLORS.orange,
                   alignItems: "center",
                   justifyContent: "center",
                   borderWidth: 1,
                   borderColor: "rgba(255,255,255,0.28)",
+                  shadowColor: COLORS.orange,
+                  shadowOffset: { width: 0, height: 12 },
+                  shadowOpacity: 0.32,
+                  shadowRadius: 22,
                 }}
               >
                 <Play size={32} color={COLORS.black} fill={COLORS.black} />
@@ -674,14 +900,18 @@ function TrackingDock({
                   onPress={onResumeRun}
                   activeOpacity={0.85}
                   style={{
-                    width: 84,
-                    height: 84,
-                    borderRadius: 42,
+                    width: 74,
+                    height: 74,
+                    borderRadius: 37,
                     backgroundColor: COLORS.orange,
                     alignItems: "center",
                     justifyContent: "center",
                     borderWidth: 1,
                     borderColor: "rgba(255,255,255,0.28)",
+                    shadowColor: COLORS.orange,
+                    shadowOffset: { width: 0, height: 12 },
+                    shadowOpacity: 0.32,
+                    shadowRadius: 22,
                   }}
                 >
                   <Play size={32} color={COLORS.black} fill={COLORS.black} />
@@ -703,9 +933,9 @@ function TrackingDock({
                   onPress={onFinishRun}
                   activeOpacity={0.85}
                   style={{
-                    width: 84,
-                    height: 84,
-                    borderRadius: 42,
+                    width: 74,
+                    height: 74,
+                    borderRadius: 37,
                     backgroundColor: COLORS.red,
                     alignItems: "center",
                     justifyContent: "center",
@@ -734,14 +964,18 @@ function TrackingDock({
                 onPress={onPauseRun}
                 activeOpacity={0.85}
                 style={{
-                  width: 84,
-                  height: 84,
-                  borderRadius: 42,
+                  width: 74,
+                  height: 74,
+                  borderRadius: 37,
                   backgroundColor: COLORS.orange,
                   alignItems: "center",
                   justifyContent: "center",
                   borderWidth: 1,
                   borderColor: "rgba(255,255,255,0.28)",
+                  shadowColor: COLORS.orange,
+                  shadowOffset: { width: 0, height: 12 },
+                  shadowOpacity: 0.32,
+                  shadowRadius: 22,
                 }}
               >
                 <Pause size={30} color={COLORS.black} />
@@ -803,6 +1037,8 @@ export default function MapScreen() {
     duration,
     paceDisplay,
     speedKmh,
+    elevationGainM,
+    elevationLossM,
     gpsStatus,
     currentAccuracy,
     currentCoords,
@@ -1234,7 +1470,6 @@ export default function MapScreen() {
               </Text>
             </View>
           ) : null}
-
         </>
       )}
 
@@ -1260,6 +1495,8 @@ export default function MapScreen() {
         paceDisplay={paceDisplay}
         distance={distance}
         speedKmh={speedKmh}
+        elevationGainM={elevationGainM}
+        elevationLossM={elevationLossM}
         currentAccuracy={currentAccuracy}
         gpsLabel={gpsLabel}
         onStartRun={startRun}

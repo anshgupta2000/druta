@@ -19,6 +19,11 @@ const MAX_ACCEPTABLE_ACCURACY_METERS = 65;
 const HARD_REJECT_ACCURACY_METERS = 120;
 const HARD_REJECT_JUMP_METERS = 400;
 const FALLBACK_POLL_INTERVAL_MS = 3000;
+const MAX_ACCEPTABLE_ELEVATION_ACCURACY_METERS = 25;
+const ELEVATION_SMOOTHING_FACTOR = 0.35;
+const ELEVATION_NOISE_MIN_METERS = 2;
+const ELEVATION_NOISE_MAX_METERS = 8;
+const ELEVATION_NOISE_ACCURACY_FACTOR = 0.2;
 
 const LIVE_CHUNK_INTERVAL_MS = 5000;
 const LIVE_CHUNK_DISTANCE_METERS = 25;
@@ -39,8 +44,16 @@ const normalizePointForLive = (point) => {
     typeof point.accuracy === "number" && Number.isFinite(point.accuracy)
       ? point.accuracy
       : null;
+  const altitude =
+    typeof point.altitude === "number" && Number.isFinite(point.altitude)
+      ? point.altitude
+      : null;
 
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(timestamp)) {
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    !Number.isFinite(timestamp)
+  ) {
     return null;
   }
 
@@ -49,6 +62,7 @@ const normalizePointForLive = (point) => {
     longitude,
     timestamp,
     accuracy,
+    altitude,
   };
 };
 
@@ -66,6 +80,8 @@ export function useRunTracker() {
   const [currentAccuracy, setCurrentAccuracy] = useState(null);
   const [liveSpeedMps, setLiveSpeedMps] = useState(0);
   const [currentCoords, setCurrentCoords] = useState(null);
+  const [elevationGainM, setElevationGainM] = useState(0);
+  const [elevationLossM, setElevationLossM] = useState(0);
 
   const locationSub = useRef(null);
   const timerRef = useRef(null);
@@ -75,6 +91,9 @@ export function useRunTracker() {
   const lastProcessedPosition = useRef(null);
   const pendingDistanceMeters = useRef(0);
   const totalDistanceMeters = useRef(0);
+  const totalElevationGainMeters = useRef(0);
+  const totalElevationLossMeters = useRef(0);
+  const lastSmoothedAltitudeMeters = useRef(null);
   const speedWindowSamples = useRef([]);
 
   const runSessionIdRef = useRef(null);
@@ -137,7 +156,10 @@ export function useRunTracker() {
         }
 
         const territoryMap = new Map(
-          current.territories.map((tile) => [`${tile.grid_lat}:${tile.grid_lng}`, tile]),
+          current.territories.map((tile) => [
+            `${tile.grid_lat}:${tile.grid_lng}`,
+            tile,
+          ]),
         );
 
         for (const tile of changedTiles) {
@@ -196,8 +218,10 @@ export function useRunTracker() {
         const now = Date.now();
         const distanceSinceLastChunk =
           totalDistanceMeters.current - lastChunkDistanceMetersRef.current;
-        const shouldFlushByTime = now - lastChunkSentAtRef.current >= LIVE_CHUNK_INTERVAL_MS;
-        const shouldFlushByDistance = distanceSinceLastChunk >= LIVE_CHUNK_DISTANCE_METERS;
+        const shouldFlushByTime =
+          now - lastChunkSentAtRef.current >= LIVE_CHUNK_INTERVAL_MS;
+        const shouldFlushByDistance =
+          distanceSinceLastChunk >= LIVE_CHUNK_DISTANCE_METERS;
 
         if (!force && !shouldFlushByTime && !shouldFlushByDistance) {
           return false;
@@ -230,7 +254,10 @@ export function useRunTracker() {
             errorPayload = null;
           }
 
-          if (res.status === 409 && Number.isFinite(Number(errorPayload?.expected_seq))) {
+          if (
+            res.status === 409 &&
+            Number.isFinite(Number(errorPayload?.expected_seq))
+          ) {
             const expectedSeq = Number(errorPayload.expected_seq);
             if (expectedSeq === payload.seq + 1) {
               pendingLivePointsRef.current.splice(0, payload.points.length);
@@ -308,7 +335,8 @@ export function useRunTracker() {
 
     while (Date.now() < deadline) {
       const hasPending =
-        pendingLivePointsRef.current.length > 0 || Boolean(inFlightChunkRef.current);
+        pendingLivePointsRef.current.length > 0 ||
+        Boolean(inFlightChunkRef.current);
       if (!hasPending) {
         return true;
       }
@@ -361,7 +389,10 @@ export function useRunTracker() {
       return;
     }
 
-    const traveledMeters = Math.max(0, last.distanceMeters - first.distanceMeters);
+    const traveledMeters = Math.max(
+      0,
+      last.distanceMeters - first.distanceMeters,
+    );
     const rawSpeedMps = traveledMeters / elapsedSeconds;
 
     setLiveSpeedMps((previous) => {
@@ -372,6 +403,91 @@ export function useRunTracker() {
           : rawSpeedMps;
       return Math.min(Math.max(smoothed, 0), MAX_ACCEPTED_SPEED_MPS);
     });
+  }, []);
+
+  const updateElevationFromSample = useCallback((coords) => {
+    if (!coords) {
+      return;
+    }
+
+    const altitude = Number(coords.altitude);
+    if (!Number.isFinite(altitude)) {
+      return;
+    }
+
+    const altitudeAccuracy =
+      typeof coords.altitudeAccuracy === "number" &&
+      Number.isFinite(coords.altitudeAccuracy)
+        ? Math.max(coords.altitudeAccuracy, 0)
+        : null;
+
+    if (
+      altitudeAccuracy !== null &&
+      altitudeAccuracy > MAX_ACCEPTABLE_ELEVATION_ACCURACY_METERS
+    ) {
+      return;
+    }
+
+    if (!Number.isFinite(lastSmoothedAltitudeMeters.current)) {
+      lastSmoothedAltitudeMeters.current = altitude;
+      return;
+    }
+
+    const previousAltitude = lastSmoothedAltitudeMeters.current;
+    const smoothedAltitude =
+      previousAltitude +
+      (altitude - previousAltitude) * ELEVATION_SMOOTHING_FACTOR;
+    lastSmoothedAltitudeMeters.current = smoothedAltitude;
+
+    const rawDelta = smoothedAltitude - previousAltitude;
+    const accuracyForGate =
+      altitudeAccuracy ?? MAX_ACCEPTABLE_ELEVATION_ACCURACY_METERS / 2;
+    const elevationNoiseGate = Math.max(
+      ELEVATION_NOISE_MIN_METERS,
+      Math.min(
+        ELEVATION_NOISE_MAX_METERS,
+        accuracyForGate * ELEVATION_NOISE_ACCURACY_FACTOR,
+      ),
+    );
+
+    if (Math.abs(rawDelta) < elevationNoiseGate) {
+      return;
+    }
+
+    const creditedDelta =
+      Math.abs(rawDelta) - elevationNoiseGate * DISTANCE_DEDUCTION_RATIO;
+    if (creditedDelta <= 0) {
+      return;
+    }
+
+    if (rawDelta > 0) {
+      totalElevationGainMeters.current += creditedDelta;
+      setElevationGainM(Math.round(totalElevationGainMeters.current * 10) / 10);
+      return;
+    }
+
+    totalElevationLossMeters.current += creditedDelta;
+    setElevationLossM(Math.round(totalElevationLossMeters.current * 10) / 10);
+  }, []);
+
+  const resetRunMetrics = useCallback(() => {
+    setDistance(0);
+    setDuration(0);
+    setPositions([]);
+    setStartTime(null);
+    setGpsStatus("idle");
+    setCurrentAccuracy(null);
+    setLiveSpeedMps(0);
+    setElevationGainM(0);
+    setElevationLossM(0);
+
+    lastProcessedPosition.current = null;
+    pendingDistanceMeters.current = 0;
+    totalDistanceMeters.current = 0;
+    totalElevationGainMeters.current = 0;
+    totalElevationLossMeters.current = 0;
+    lastSmoothedAltitudeMeters.current = null;
+    speedWindowSamples.current = [];
   }, []);
 
   const acceptLocationSample = useCallback(
@@ -385,6 +501,16 @@ export function useRunTracker() {
         return;
       }
 
+      const altitude =
+        typeof coords.altitude === "number" && Number.isFinite(coords.altitude)
+          ? coords.altitude
+          : null;
+      const altitudeAccuracy =
+        typeof coords.altitudeAccuracy === "number" &&
+        Number.isFinite(coords.altitudeAccuracy)
+          ? Math.max(coords.altitudeAccuracy, 0)
+          : null;
+
       const accuracy =
         typeof coords.accuracy === "number" && Number.isFinite(coords.accuracy)
           ? Math.max(coords.accuracy, 0)
@@ -396,6 +522,7 @@ export function useRunTracker() {
 
       setCurrentCoords({ latitude, longitude });
       setCurrentAccuracy(accuracy);
+      updateElevationFromSample(coords);
 
       if (accuracy !== null && accuracy > HARD_REJECT_ACCURACY_METERS) {
         setGpsStatus("waiting");
@@ -408,6 +535,8 @@ export function useRunTracker() {
         longitude,
         timestamp,
         accuracy,
+        altitude,
+        altitudeAccuracy,
       };
 
       if (!lastProcessedPosition.current) {
@@ -425,15 +554,18 @@ export function useRunTracker() {
       }
 
       const previous = lastProcessedPosition.current;
-      const segmentDistanceKm = calculateDistance(
+      const horizontalDistanceKm = calculateDistance(
         previous.latitude,
         previous.longitude,
         sample.latitude,
         sample.longitude,
       );
-      const segmentDistanceMeters = segmentDistanceKm * 1000;
-      const elapsedSeconds = Math.max((timestamp - previous.timestamp) / 1000, 0.5);
-      const derivedSpeedMps = segmentDistanceMeters / elapsedSeconds;
+      const horizontalDistanceMeters = horizontalDistanceKm * 1000;
+      const elapsedSeconds = Math.max(
+        (timestamp - previous.timestamp) / 1000,
+        0.5,
+      );
+      const derivedSpeedMps = horizontalDistanceMeters / elapsedSeconds;
 
       const dynamicMaxSegmentMeters = Math.max(
         HARD_REJECT_JUMP_METERS,
@@ -441,7 +573,7 @@ export function useRunTracker() {
       );
       if (
         derivedSpeedMps > MAX_ACCEPTED_SPEED_MPS * 1.8 ||
-        segmentDistanceMeters > dynamicMaxSegmentMeters
+        horizontalDistanceMeters > dynamicMaxSegmentMeters
       ) {
         if (accuracy === null || accuracy <= MAX_ACCEPTABLE_ACCURACY_METERS) {
           lastProcessedPosition.current = sample;
@@ -460,16 +592,18 @@ export function useRunTracker() {
 
       const previousAccuracy =
         previous.accuracy ?? MAX_ACCEPTABLE_ACCURACY_METERS / 2;
-      const currentSampleAccuracy = accuracy ?? MAX_ACCEPTABLE_ACCURACY_METERS / 2;
+      const currentSampleAccuracy =
+        accuracy ?? MAX_ACCEPTABLE_ACCURACY_METERS / 2;
       const noiseGateMeters = Math.max(
         NOISE_GATE_MIN_METERS,
         Math.min(
           NOISE_GATE_MAX_METERS,
-          (previousAccuracy + currentSampleAccuracy) * NOISE_GATE_ACCURACY_FACTOR,
+          (previousAccuracy + currentSampleAccuracy) *
+            NOISE_GATE_ACCURACY_FACTOR,
         ),
       );
 
-      if (segmentDistanceMeters < noiseGateMeters) {
+      if (horizontalDistanceMeters < noiseGateMeters) {
         setGpsStatus("tracking");
         updateLiveSpeed(timestamp);
         return;
@@ -477,7 +611,7 @@ export function useRunTracker() {
 
       const creditedDistanceMeters = Math.max(
         0,
-        segmentDistanceMeters - noiseGateMeters * DISTANCE_DEDUCTION_RATIO,
+        horizontalDistanceMeters - noiseGateMeters * DISTANCE_DEDUCTION_RATIO,
       );
       pendingDistanceMeters.current += creditedDistanceMeters;
       lastProcessedPosition.current = sample;
@@ -496,7 +630,7 @@ export function useRunTracker() {
       setGpsStatus("tracking");
       updateLiveSpeed(timestamp);
     },
-    [queueLivePoint, updateLiveSpeed],
+    [queueLivePoint, updateElevationFromSample, updateLiveSpeed],
   );
 
   const beginLocationTracking = useCallback(async () => {
@@ -597,10 +731,15 @@ export function useRunTracker() {
     setGpsStatus("acquiring");
     setCurrentAccuracy(null);
     setLiveSpeedMps(0);
+    setElevationGainM(0);
+    setElevationLossM(0);
     setCurrentCoords(null);
     lastProcessedPosition.current = null;
     pendingDistanceMeters.current = 0;
     totalDistanceMeters.current = 0;
+    totalElevationGainMeters.current = 0;
+    totalElevationLossMeters.current = 0;
+    lastSmoothedAltitudeMeters.current = null;
     speedWindowSamples.current = [];
     resetLiveSessionRefs();
 
@@ -640,6 +779,7 @@ export function useRunTracker() {
     setLiveSpeedMps(0);
     speedWindowSamples.current = [];
     lastProcessedPosition.current = null;
+    lastSmoothedAltitudeMeters.current = null;
   }, [isPaused, isRunning, stopTracking]);
 
   const resumeRun = useCallback(async () => {
@@ -654,6 +794,7 @@ export function useRunTracker() {
     speedWindowSamples.current = [];
     lastProcessedPosition.current = null;
     pendingDistanceMeters.current = 0;
+    lastSmoothedAltitudeMeters.current = null;
 
     await beginLocationTracking();
   }, [beginLocationTracking, isPaused, isRunning]);
@@ -679,77 +820,94 @@ export function useRunTracker() {
     setLiveSpeedMps(0);
 
     const finalDistanceKm = totalDistanceMeters.current / 1000;
+    const finalDurationSeconds = duration;
     const finalAverageSpeedMps =
-      duration > 0 && finalDistanceKm > 0
-        ? (finalDistanceKm * 1000) / duration
+      finalDurationSeconds > 0 && finalDistanceKm > 0
+        ? (finalDistanceKm * 1000) / finalDurationSeconds
         : 0;
+    const finalStartedAt = startTime;
+    const finalPositions = positions;
+    const finalElevationGainMeters =
+      Math.round(totalElevationGainMeters.current * 10) / 10;
+    const finalElevationLossMeters =
+      Math.round(totalElevationLossMeters.current * 10) / 10;
 
     const hasLiveSession = Boolean(runSessionIdRef.current);
 
-    if (hasLiveSession) {
-      await drainLiveChunks();
+    try {
+      if (hasLiveSession) {
+        await drainLiveChunks();
 
-      try {
-        const finalPoints = inFlightChunkRef.current
-          ? []
-          : pendingLivePointsRef.current.slice();
-        const finishRes = await fetch("/api/runs/live/finish", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            run_session_id: runSessionIdRef.current,
-            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
-            duration_seconds: duration,
-            avg_pace: finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
-            started_at: startTime,
-            final_points: finalPoints,
-          }),
-        });
+        try {
+          const finalPoints = inFlightChunkRef.current
+            ? []
+            : pendingLivePointsRef.current.slice();
+          const finishRes = await fetch("/api/runs/live/finish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              run_session_id: runSessionIdRef.current,
+              distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+              duration_seconds: finalDurationSeconds,
+              avg_pace:
+                finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
+              started_at: finalStartedAt,
+              final_points: finalPoints,
+              elevation_gain_m: finalElevationGainMeters,
+              elevation_loss_m: finalElevationLossMeters,
+            }),
+          });
 
-        if (!finishRes.ok) {
-          throw new Error(`finish failed: ${finishRes.status}`);
+          if (!finishRes.ok) {
+            throw new Error(`finish failed: ${finishRes.status}`);
+          }
+
+          queryClient.invalidateQueries({ queryKey: ["runs"] });
+          queryClient.invalidateQueries({ queryKey: ["profile"] });
+          queryClient.invalidateQueries({ queryKey: ["territories"] });
+          queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+          return;
+        } catch (error) {
+          console.error("Live run finish error:", error);
         }
-
-        resetLiveSessionRefs();
-        queryClient.invalidateQueries({ queryKey: ["runs"] });
-        queryClient.invalidateQueries({ queryKey: ["profile"] });
-        queryClient.invalidateQueries({ queryKey: ["territories"] });
-        queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
-        return;
-      } catch (error) {
-        console.error("Live run finish error:", error);
       }
-    }
 
-    if (finalDistanceKm > 0.01) {
-      try {
-        const routeData = positions.length > 0 ? JSON.stringify(positions) : null;
-        await fetch("/api/runs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            distance_km: Math.round(finalDistanceKm * 1000) / 1000,
-            duration_seconds: duration,
-            avg_pace: finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
-            territories_claimed: 0,
-            route_data: routeData,
-            started_at: startTime,
-          }),
-        });
-        queryClient.invalidateQueries({ queryKey: ["runs"] });
-        queryClient.invalidateQueries({ queryKey: ["profile"] });
-      } catch (err) {
-        console.error("Save run error:", err);
+      if (finalDistanceKm > 0.01) {
+        try {
+          const routeData =
+            finalPositions.length > 0 ? JSON.stringify(finalPositions) : null;
+          await fetch("/api/runs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              distance_km: Math.round(finalDistanceKm * 1000) / 1000,
+              duration_seconds: finalDurationSeconds,
+              avg_pace:
+                finalAverageSpeedMps > 0 ? finalAverageSpeedMps * 3.6 : null,
+              territories_claimed: 0,
+              route_data: routeData,
+              started_at: finalStartedAt,
+              elevation_gain_m: finalElevationGainMeters,
+              elevation_loss_m: finalElevationLossMeters,
+            }),
+          });
+          queryClient.invalidateQueries({ queryKey: ["runs"] });
+          queryClient.invalidateQueries({ queryKey: ["profile"] });
+        } catch (err) {
+          console.error("Save run error:", err);
+        }
       }
+    } finally {
+      resetLiveSessionRefs();
+      resetRunMetrics();
     }
-
-    resetLiveSessionRefs();
   }, [
     drainLiveChunks,
     duration,
     isRunning,
     positions,
     queryClient,
+    resetRunMetrics,
     resetLiveSessionRefs,
     startTime,
     stopTracking,
@@ -773,6 +931,8 @@ export function useRunTracker() {
     duration,
     paceDisplay,
     speedKmh,
+    elevationGainM,
+    elevationLossM,
     gpsStatus,
     currentAccuracy,
     currentCoords,
