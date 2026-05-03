@@ -2,6 +2,10 @@ import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { ensureAuthUser } from "@/app/api/utils/users";
 
+function isParticipant(race, userId) {
+  return race.challenger_id === userId || race.opponent_id === userId;
+}
+
 export async function GET(request) {
   try {
     const session = await auth();
@@ -92,11 +96,22 @@ export async function PUT(request) {
       return Response.json({ error: "race_id required" }, { status: 400 });
     }
 
-    const raceRows =
-      await sql`SELECT * FROM races WHERE id = ${race_id} LIMIT 1`;
+    const raceRows = await sql`SELECT * FROM races WHERE id = ${race_id} LIMIT 1`;
     const race = raceRows?.[0];
     if (!race) {
       return Response.json({ error: "Race not found" }, { status: 404 });
+    }
+
+    if (!isParticipant(race, userId)) {
+      return Response.json({ error: "Not authorized for this race" }, { status: 403 });
+    }
+
+    const isFinalized = race.status === "finished" || race.status === "declined";
+    if (isFinalized) {
+      return Response.json(
+        { error: `Race is already ${race.status}` },
+        { status: 409 },
+      );
     }
 
     if (action === "accept") {
@@ -104,6 +119,12 @@ export async function PUT(request) {
         return Response.json(
           { error: "Not your race to accept" },
           { status: 403 },
+        );
+      }
+      if (race.status !== "pending") {
+        return Response.json(
+          { error: "Only pending races can be accepted" },
+          { status: 409 },
         );
       }
       const result = await sql`
@@ -114,6 +135,18 @@ export async function PUT(request) {
     }
 
     if (action === "decline") {
+      if (race.opponent_id !== userId) {
+        return Response.json(
+          { error: "Not your race to decline" },
+          { status: 403 },
+        );
+      }
+      if (race.status !== "pending") {
+        return Response.json(
+          { error: "Only pending races can be declined" },
+          { status: 409 },
+        );
+      }
       const result = await sql`
         UPDATE races SET status = 'declined'
         WHERE id = ${race_id} RETURNING *
@@ -122,10 +155,14 @@ export async function PUT(request) {
     }
 
     if (action === "update_distance") {
+      if (race.status !== "active") {
+        return Response.json(
+          { error: "Distance can only be updated for active races" },
+          { status: 409 },
+        );
+      }
+
       const isChallenger = race.challenger_id === userId;
-      const distanceField = isChallenger
-        ? "challenger_distance"
-        : "opponent_distance";
 
       let updateQuery;
       if (isChallenger) {
@@ -138,23 +175,14 @@ export async function PUT(request) {
 
       const updatedRace = updateQuery?.[0];
 
-      // Check if race is finished (distance race)
       if (updatedRace && race.race_type === "distance") {
         const targetKm = race.target_value;
-        const cDist = isChallenger
-          ? distance || 0
-          : updatedRace.challenger_distance;
-        const oDist = isChallenger
-          ? updatedRace.opponent_distance
-          : distance || 0;
+        const cDist = isChallenger ? distance || 0 : updatedRace.challenger_distance;
+        const oDist = isChallenger ? updatedRace.opponent_distance : distance || 0;
 
         if (cDist >= targetKm || oDist >= targetKm) {
-          const winnerId =
-            cDist >= targetKm ? race.challenger_id : race.opponent_id;
-          const loserId =
-            winnerId === race.challenger_id
-              ? race.opponent_id
-              : race.challenger_id;
+          const winnerId = cDist >= targetKm ? race.challenger_id : race.opponent_id;
+          const loserId = winnerId === race.challenger_id ? race.opponent_id : race.challenger_id;
 
           await sql`UPDATE races SET status = 'finished', winner_id = ${winnerId}, ended_at = NOW() WHERE id = ${race_id}`;
           await sql`UPDATE auth_users SET wins = wins + 1 WHERE id = ${winnerId}`;
@@ -172,6 +200,31 @@ export async function PUT(request) {
       }
 
       return Response.json({ race: updatedRace });
+    }
+
+    if (action === "forfeit") {
+      if (race.status !== "active") {
+        return Response.json(
+          { error: "Only active races can be forfeited" },
+          { status: 409 },
+        );
+      }
+
+      const winnerId = race.challenger_id === userId ? race.opponent_id : race.challenger_id;
+      const loserId = userId;
+
+      await sql`UPDATE races SET status = 'finished', winner_id = ${winnerId}, ended_at = NOW() WHERE id = ${race_id}`;
+      await sql`UPDATE auth_users SET wins = wins + 1 WHERE id = ${winnerId}`;
+      await sql`UPDATE auth_users SET losses = losses + 1 WHERE id = ${loserId}`;
+
+      const finalRace = await sql`
+        SELECT r.*, c.username as challenger_username, o.username as opponent_username
+        FROM races r
+        LEFT JOIN auth_users c ON r.challenger_id = c.id
+        LEFT JOIN auth_users o ON r.opponent_id = o.id
+        WHERE r.id = ${race_id}
+      `;
+      return Response.json({ race: finalRace?.[0], finished: true, forfeited: true });
     }
 
     return Response.json({ error: "Invalid action" }, { status: 400 });
