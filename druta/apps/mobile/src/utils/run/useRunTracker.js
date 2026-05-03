@@ -967,10 +967,18 @@ export function useRunTracker() {
             elevation_loss_m: finalElevationLossMeters,
             completed_at: new Date().toISOString(),
           });
+          Alert.alert(
+            "Run saved without verification",
+            "Live finish failed, so this run was saved as unverified and does not affect leaderboard stats.",
+          );
           queryClient.invalidateQueries({ queryKey: ["runs"] });
           queryClient.invalidateQueries({ queryKey: ["profile"] });
         } catch (err) {
           console.error("Save run error:", err);
+          Alert.alert(
+            "Run save failed",
+            "We couldn't verify or save this run. Please try again with a stable connection.",
+          );
         }
       }
     } finally {
