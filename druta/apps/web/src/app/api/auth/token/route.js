@@ -2,9 +2,42 @@ import { getToken } from '@auth/core/jwt';
 import { getDevAuthSession } from '../utils/dev-auth';
 import { getSecureCookieFlag, hasHostedAuthConfig } from '../utils/auth-config';
 import { ensureAuthUser } from '@/app/api/utils/users';
+import { getClerkSession } from '../utils/clerk-auth';
 
 export async function GET(request) {
-	const hasHostedAuth = hasHostedAuthConfig();
+	
+	const clerkSession = await getClerkSession(request);
+	if (clerkSession?.user?.id) {
+		const profile = await ensureAuthUser({
+			id: clerkSession.user.id,
+			email: clerkSession.user.email,
+			name: clerkSession.user.name,
+			image: clerkSession.user.image,
+		});
+
+		if (!profile) {
+			return new Response(JSON.stringify({ error: 'Failed to initialize user profile' }), {
+				status: 500,
+				headers: {
+					'Content-Type': 'application/json',
+				},
+			});
+		}
+
+		return new Response(
+			JSON.stringify({
+				jwt: null,
+				user: {
+					id: profile.id,
+					email: profile.email || clerkSession.user.email,
+					name: profile.name || clerkSession.user.name,
+				},
+			}),
+			{ headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
+const hasHostedAuth = hasHostedAuthConfig();
 	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true' || !hasHostedAuth;
 	const secureCookie = getSecureCookieFlag();
 

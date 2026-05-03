@@ -8,6 +8,7 @@ import Credentials from '@auth/core/providers/credentials';
 import { getContext } from 'hono/context-storage';
 import { getDevAuthSession } from '@/app/api/auth/utils/dev-auth';
 import { hasHostedAuthConfig } from '@/app/api/auth/utils/auth-config';
+import { getClerkSession } from '@/app/api/auth/utils/clerk-auth';
 
 const result = CreateAuth({
 	basePath: '/api/auth',
@@ -39,6 +40,25 @@ const allowDevAuthFallback = () => {
 
 export const auth = async () => {
 	let session = null;
+	try {
+		const context = getContext();
+		const request = context?.req?.raw;
+		if (request) {
+			const clerkSession = await getClerkSession(request);
+			if (clerkSession?.user?.id) {
+				return {
+					user: {
+						id: clerkSession.user.id,
+						email: clerkSession.user.email,
+						name: clerkSession.user.name,
+						image: clerkSession.user.image,
+					},
+					expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+				};
+			}
+		}
+	} catch {}
+
 	try {
 		session = await createAuth();
 	} catch {
