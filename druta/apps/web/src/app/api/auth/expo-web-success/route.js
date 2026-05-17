@@ -2,8 +2,56 @@ import { getToken } from '@auth/core/jwt';
 import { getDevAuthSession } from '../utils/dev-auth';
 import { getSecureCookieFlag, hasHostedAuthConfig } from '../utils/auth-config';
 import { ensureAuthUser } from '@/app/api/utils/users';
+import { getClerkSession } from '../utils/clerk-auth';
+
+const htmlMessage = (message, status = 200) =>
+	new Response(
+		`
+		<html>
+			<body>
+				<script>
+					window.parent.postMessage(${JSON.stringify(message)}, '*');
+				</script>
+			</body>
+		</html>
+		`,
+		{
+			status,
+			headers: {
+				'Content-Type': 'text/html',
+			},
+		}
+	);
 
 export async function GET(request) {
+	const clerkSession = await getClerkSession(request);
+	if (clerkSession?.user?.id) {
+		if (typeof clerkSession.token !== 'string' || !clerkSession.token) {
+			return htmlMessage({ type: 'AUTH_ERROR', error: 'Missing Clerk session token' }, 401);
+		}
+
+		const profile = await ensureAuthUser({
+			id: clerkSession.user.id,
+			email: clerkSession.user.email,
+			name: clerkSession.user.name,
+			image: clerkSession.user.image,
+		});
+
+		if (!profile) {
+			return htmlMessage({ type: 'AUTH_ERROR', error: 'Failed to initialize user profile' }, 500);
+		}
+
+		return htmlMessage({
+			type: 'AUTH_SUCCESS',
+			jwt: clerkSession.token,
+			user: {
+				id: profile.id,
+				email: profile.email || clerkSession.user.email,
+				name: profile.name || clerkSession.user.name,
+			},
+		});
+	}
+
 	const hasHostedAuth = hasHostedAuthConfig();
 	const allowDevAuth = process.env.ALLOW_DEV_AUTH === 'true' || !hasHostedAuth;
 	const secureCookie = getSecureCookieFlag();
@@ -39,23 +87,7 @@ export async function GET(request) {
 	}
 
 	if (!jwt) {
-		return new Response(
-			`
-			<html>
-				<body>
-					<script>
-						window.parent.postMessage({ type: 'AUTH_ERROR', error: 'Unauthorized' }, '*');
-					</script>
-				</body>
-			</html>
-			`,
-			{
-				status: 401,
-				headers: {
-					'Content-Type': 'text/html',
-				},
-			}
-		);
+		return htmlMessage({ type: 'AUTH_ERROR', error: 'Unauthorized' }, 401);
 	}
 
 	const profile = await ensureAuthUser({
@@ -65,23 +97,7 @@ export async function GET(request) {
 		image: jwt.picture,
 	});
 	if (!profile) {
-		return new Response(
-			`
-			<html>
-				<body>
-					<script>
-						window.parent.postMessage({ type: 'AUTH_ERROR', error: 'Failed to initialize user profile' }, '*');
-					</script>
-				</body>
-			</html>
-			`,
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'text/html',
-				},
-			}
-		);
+		return htmlMessage({ type: 'AUTH_ERROR', error: 'Failed to initialize user profile' }, 500);
 	}
 
 	const message = {
@@ -94,20 +110,5 @@ export async function GET(request) {
 		},
 	};
 
-	return new Response(
-		`
-		<html>
-			<body>
-				<script>
-					window.parent.postMessage(${JSON.stringify(message)}, '*');
-				</script>
-			</body>
-		</html>
-		`,
-		{
-			headers: {
-				'Content-Type': 'text/html',
-			},
-		}
-	);
+	return htmlMessage(message);
 }

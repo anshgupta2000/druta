@@ -37,7 +37,7 @@ export const useAuth = () => {
   }, [open]);
 
   const signOut = useCallback(() => {
-    setAuth(null);
+    setAuth(null, { source: 'manual' });
     close();
   }, [close, setAuth]);
 

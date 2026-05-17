@@ -44,13 +44,14 @@ export const clearStoredAuth = async () => {
 export const useAuthStore = create((set) => ({
   isReady: false,
   auth: null,
-  setAuth: (auth) => {
+  authSource: 'initial',
+  setAuth: (auth, options = {}) => {
     if (auth) {
       writeStoredAuth(auth);
     } else {
       clearStoredAuth();
     }
-    set({ auth });
+    set({ auth, authSource: options.source || 'app' });
   },
 }));
 

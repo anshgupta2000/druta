@@ -1,10 +1,12 @@
 import React from 'react';
 import Constants from 'expo-constants';
 import { Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { AuthWebView } from './AuthWebView';
+import { ClerkEmailAuthView } from './ClerkEmailAuthView';
+import { authLog } from './debug';
 import { authKey, useAuthModal, useAuthStore } from './store';
 
 const DEV_AUTH_PORT = process.env.EXPO_PUBLIC_AUTH_PORT || '3000';
+const clerkPublishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 const getHostFromCandidate = (candidate) => {
   if (!candidate || typeof candidate !== 'string') return null;
@@ -82,6 +84,62 @@ export const AuthModal = () => {
     baseURL;
   const canUseHostedAuth =
     process.env.EXPO_PUBLIC_FORCE_LOCAL_API !== 'true' && Boolean(baseURL && proxyURL);
+  const canUseNativeClerkEmailAuth =
+    Boolean(clerkPublishableKey) && Platform.OS !== 'web';
+  const canUseClerkWebAuthView =
+    Boolean(clerkPublishableKey) && Platform.OS === 'web';
+
+  React.useEffect(() => {
+    authLog('info', 'modal:capabilities', {
+      isOpen,
+      mode,
+      hasStoredAuth: Boolean(auth),
+      platform: Platform.OS,
+      hasClerkPublishableKey: Boolean(clerkPublishableKey),
+      baseURL,
+      proxyURL,
+      inferredLocalAuthBaseURL,
+      canUseHostedAuth,
+      canUseNativeClerkEmailAuth,
+      canUseClerkWebAuthView,
+      forceLocalApi: process.env.EXPO_PUBLIC_FORCE_LOCAL_API,
+    });
+  }, [
+    auth,
+    baseURL,
+    canUseClerkWebAuthView,
+    canUseHostedAuth,
+    canUseNativeClerkEmailAuth,
+    inferredLocalAuthBaseURL,
+    isOpen,
+    mode,
+    proxyURL,
+  ]);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+
+    const openFromURL = () => {
+      const params = new URLSearchParams(window.location.search);
+      const authMode = params.get('auth');
+      if (authMode !== 'signin' && authMode !== 'signup') {
+        return;
+      }
+      useAuthModal.getState().open({ mode: authMode });
+      params.delete('auth');
+      const nextSearch = params.toString();
+      const nextURL = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+      window.history.replaceState(window.history.state, '', nextURL);
+    };
+
+    openFromURL();
+    window.addEventListener('popstate', openFromURL);
+    return () => {
+      window.removeEventListener('popstate', openFromURL);
+    };
+  }, []);
 
   const completeLocalAuth = React.useCallback(() => {
     const normalizedEmail =
@@ -113,6 +171,23 @@ export const AuthModal = () => {
       setName('');
     }
   }, [isOpen]);
+
+  if (canUseNativeClerkEmailAuth) {
+    return (
+      <Modal visible={isOpen && !auth} animationType="slide" presentationStyle="fullScreen">
+        <ClerkEmailAuthView mode={mode} close={close} />
+      </Modal>
+    );
+  }
+
+  if (canUseClerkWebAuthView) {
+    const { ClerkAuthView } = require('./ClerkAuthView.web');
+    return (
+      <Modal visible={isOpen && !auth} animationType="slide" presentationStyle="pageSheet">
+        <ClerkAuthView mode={mode} close={close} />
+      </Modal>
+    );
+  }
 
   if (!canUseHostedAuth) {
     return (
@@ -202,6 +277,8 @@ export const AuthModal = () => {
       </Modal>
     );
   }
+
+  const { AuthWebView } = require('./AuthWebView');
 
   return (
     <Modal visible={isOpen && !auth} animationType="slide" presentationStyle='pageSheet'>

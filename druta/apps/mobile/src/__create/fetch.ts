@@ -1,6 +1,8 @@
 import * as SecureStore from 'expo-secure-store';
 import { fetch as expoFetch } from 'expo/fetch';
 import { handleLocalApiRequest, shouldUseLocalApiFallback } from './local-api';
+import { authLog } from '../utils/auth/debug';
+import { getFreshClerkToken } from '../utils/auth/clerk-token';
 
 const originalFetch = fetch;
 const authKey = `${process.env.EXPO_PUBLIC_PROJECT_GROUP_ID}-jwt`;
@@ -10,8 +12,10 @@ const getURLFromArgs = (...args: Parameters<typeof fetch>) => {
   let url: string | null;
   if (typeof urlArg === 'string') {
     url = urlArg;
+  } else if (urlArg instanceof URL) {
+    url = urlArg.href;
   } else if (typeof urlArg === 'object' && urlArg !== null) {
-    url = urlArg.url;
+    url = 'url' in urlArg && typeof urlArg.url === 'string' ? urlArg.url : null;
   } else {
     url = null;
   }
@@ -31,6 +35,63 @@ const isFirstPartyURL = (url: string) => {
 
 const isSecondPartyURL = (url: string) => {
   return url.startsWith('/_create/');
+};
+
+const isClerkURL = (url: string) => {
+  return (
+    url.includes('clerk.') ||
+    url.includes('clerk.com') ||
+    url.includes('clerk.dev') ||
+    url.includes('/v1/client') ||
+    url.includes('/v1/me')
+  );
+};
+
+const getExternalFetchInput = (
+  input: Parameters<typeof expoFetch>[0],
+  url: string
+) => {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return url;
+  if (
+    typeof input === 'object' &&
+    input !== null &&
+    'href' in input &&
+    typeof input.href === 'string'
+  ) {
+    return url;
+  }
+  return input;
+};
+
+const fetchWithAuthLogging = async (
+  input: Parameters<typeof expoFetch>[0],
+  init: Parameters<typeof expoFetch>[1],
+  details: { url: string; route: string },
+  fetcher: typeof fetch = expoFetch
+) => {
+  const startedAt = Date.now();
+  authLog('info', 'fetch:start', {
+    ...details,
+    method: init?.method || 'GET',
+  });
+  try {
+    const response = await fetcher(input, init);
+    authLog('info', 'fetch:response', {
+      ...details,
+      durationMs: Date.now() - startedAt,
+      status: response.status,
+      ok: response.ok,
+    });
+    return response;
+  } catch (error) {
+    authLog('warn', 'fetch:error', {
+      ...details,
+      durationMs: Date.now() - startedAt,
+      error,
+    });
+    throw error;
+  }
 };
 
 const getStoredAuth = async () => {
@@ -70,10 +131,22 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
   const isExternalFetch = !isFirstPartyURL(url);
   // we should not add headers to requests that don't go to our own server
   if (isExternalFetch) {
+    if (isClerkURL(url)) {
+      return fetchWithAuthLogging(
+        getExternalFetchInput(input, url),
+        init,
+        { url, route: 'clerk-external' },
+        originalFetch
+      );
+    }
     return expoFetch(input, init);
   }
 
-  const auth = await getStoredAuth();
+  const storedAuth = await getStoredAuth();
+  const freshClerkToken = await getFreshClerkToken();
+  const auth = freshClerkToken
+    ? { ...(storedAuth || {}), jwt: freshClerkToken }
+    : storedAuth;
 
   if (shouldUseLocalApiFallback()) {
     const localResponse = await handleLocalApiRequest({ url, init, auth });
@@ -121,10 +194,19 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
     finalHeaders.set('authorization', `Bearer ${auth.jwt}`);
   }
 
-  return expoFetch(finalInput, {
+  const finalInit = {
     ...init,
     headers: finalHeaders,
-  });
+  };
+
+  if (isClerkURL(url) || isClerkURL(String(finalInput))) {
+    return fetchWithAuthLogging(finalInput, finalInit, {
+      url: String(finalInput),
+      route: 'clerk-first-party',
+    });
+  }
+
+  return expoFetch(finalInput, finalInit);
 };
 
 export default fetchToWeb;

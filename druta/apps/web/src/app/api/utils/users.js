@@ -65,8 +65,48 @@ export async function ensureAuthUser(user) {
 
   const defaultUsername = buildDefaultUsername(normalized);
   const avatarColor = colorForUserId(normalized.id);
+  const returningFields =
+    "id, name, email, image, username, total_distance_km, total_runs, territories_owned, wins, losses, avatar_color, avatar_url, avatar_code, avatar_thumbnail_url, outfit_loadout";
 
-  const rows = await sql`
+  if (normalized.email) {
+    const existingRows = await sql`
+      SELECT id
+      FROM auth_users
+      WHERE id = ${normalized.id} OR LOWER(email) = ${normalized.email}
+      ORDER BY CASE WHEN id = ${normalized.id} THEN 0 ELSE 1 END
+      LIMIT 1
+    `;
+    const existing = existingRows?.[0];
+
+    if (existing?.id) {
+      const rows = await sql(
+        `
+          UPDATE auth_users
+          SET name = COALESCE($2, name),
+              email = COALESCE($3, email),
+              image = COALESCE($4, image),
+              username = COALESCE(username, $5),
+              avatar_color = COALESCE(avatar_color, $6),
+              updated_at = NOW()
+          WHERE id = $1
+          RETURNING ${returningFields}
+        `,
+        [
+          existing.id,
+          normalized.name,
+          normalized.email,
+          normalized.image,
+          defaultUsername,
+          avatarColor,
+        ],
+      );
+
+      return rows?.[0] || null;
+    }
+  }
+
+  try {
+    const rows = await sql`
     INSERT INTO auth_users (
       id, name, email, image, username, avatar_color, outfit_loadout
     )
@@ -86,7 +126,36 @@ export async function ensureAuthUser(user) {
           username = COALESCE(auth_users.username, EXCLUDED.username),
           updated_at = NOW()
     RETURNING id, name, email, image, username, total_distance_km, total_runs, territories_owned, wins, losses, avatar_color, avatar_url, avatar_code, avatar_thumbnail_url, outfit_loadout
-  `;
+    `;
 
-  return rows?.[0] || null;
+    return rows?.[0] || null;
+  } catch (error) {
+    if (error?.code !== "23505" || error?.constraint !== "auth_users_email_unique_idx" || !normalized.email) {
+      throw error;
+    }
+
+    const rows = await sql(
+      `
+        UPDATE auth_users
+        SET name = COALESCE($2, name),
+            email = COALESCE($3, email),
+            image = COALESCE($4, image),
+            username = COALESCE(username, $5),
+            avatar_color = COALESCE(avatar_color, $6),
+            updated_at = NOW()
+        WHERE LOWER(email) = $1
+        RETURNING ${returningFields}
+      `,
+      [
+        normalized.email,
+        normalized.name,
+        normalized.email,
+        normalized.image,
+        defaultUsername,
+        avatarColor,
+      ],
+    );
+
+    return rows?.[0] || null;
+  }
 }

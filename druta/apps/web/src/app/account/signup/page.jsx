@@ -1,7 +1,80 @@
 import { useState, useEffect } from "react";
+import { SignUp } from "@clerk/react-router";
+import { useLocation, useMatches } from "react-router";
 import useAuth from "@/utils/useAuth";
 
-function MainComponent() {
+const useClerkEnabled = () =>
+  useMatches().some((match) => match.id === "root" && match.data?.clerkEnabled);
+
+const getSafeRedirectUrl = (search) => {
+  const redirectUrl = new URLSearchParams(search).get("callbackUrl");
+  if (!redirectUrl || !redirectUrl.startsWith("/") || redirectUrl.startsWith("//")) {
+    return "/account/auth-check";
+  }
+  return redirectUrl;
+};
+
+function ClerkSignUpPage() {
+  const location = useLocation();
+  const fallbackRedirectUrl = getSafeRedirectUrl(location.search);
+  const signInUrl = `/account/signin${location.search || ""}`;
+
+  return (
+    <div
+      className="flex min-h-screen w-full items-center justify-center p-4"
+      style={{ backgroundColor: "#050505" }}
+    >
+      <SignUp
+        path="/account/signup"
+        routing="path"
+        signInUrl={signInUrl}
+        fallbackRedirectUrl={fallbackRedirectUrl}
+        signInFallbackRedirectUrl={fallbackRedirectUrl}
+        appearance={{
+          variables: {
+            colorPrimary: "#2D7AFF",
+            colorBackground: "#0B0B0D",
+            colorText: "#FFFFFF",
+            colorTextSecondary: "rgba(255,255,255,0.64)",
+            colorInputBackground: "rgba(255,255,255,0.06)",
+            colorInputText: "#FFFFFF",
+            borderRadius: "16px",
+          },
+          elements: {
+            cardBox: {
+              boxShadow: "none",
+            },
+            card: {
+              backgroundColor: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.06)",
+            },
+            headerTitle: {
+              color: "#FFFFFF",
+            },
+            headerSubtitle: {
+              color: "rgba(255,255,255,0.48)",
+            },
+            socialButtonsBlockButton: {
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderColor: "rgba(255,255,255,0.08)",
+              color: "#FFFFFF",
+            },
+            formButtonPrimary: {
+              backgroundColor: "#2D7AFF",
+              color: "#000000",
+              boxShadow: "0 0 24px rgba(45,122,255,0.3)",
+            },
+            footerActionLink: {
+              color: "#2D7AFF",
+            },
+          },
+        }}
+      />
+    </div>
+  );
+}
+
+function LocalCredentialsSignUpPage() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [devMode, setDevMode] = useState(true);
@@ -249,6 +322,10 @@ function MainComponent() {
       </form>
     </div>
   );
+}
+
+function MainComponent() {
+  return useClerkEnabled() ? <ClerkSignUpPage /> : <LocalCredentialsSignUpPage />;
 }
 
 export default MainComponent;

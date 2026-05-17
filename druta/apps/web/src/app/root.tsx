@@ -9,6 +9,8 @@ import {
   useRouteError,
 } from 'react-router';
 
+import { ClerkProvider } from '@clerk/react-router';
+import { rootAuthLoader } from '@clerk/react-router/ssr.server';
 import { useButton } from '@react-aria/button';
 import {
   type CSSProperties,
@@ -35,6 +37,33 @@ import { useDevServerHeartbeat } from '../__create/useDevServerHeartbeat';
 import type { Route } from './+types/root';
 
 export const links = () => [];
+
+const getClerkPublishableKey = () =>
+  process.env.VITE_CLERK_PUBLISHABLE_KEY ||
+  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+  process.env.CLERK_PUBLISHABLE_KEY;
+
+export const loader = (args: Route.LoaderArgs) => {
+  const publishableKey = getClerkPublishableKey();
+  const secretKey = process.env.CLERK_SECRET_KEY;
+
+  if (!publishableKey || !secretKey) {
+    return { clerkEnabled: false };
+  }
+
+  return rootAuthLoader(
+    args,
+    () => ({ clerkEnabled: true }),
+    {
+      publishableKey,
+      secretKey,
+      signInUrl: '/account/signin',
+      signUpUrl: '/account/signup',
+      signInFallbackRedirectUrl: '/account/auth-check',
+      signUpFallbackRedirectUrl: '/account/auth-check',
+    }
+  );
+};
 
 if (globalThis.window && globalThis.window !== undefined) {
   globalThis.window.fetch = fetch;
@@ -452,10 +481,20 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 }
 
-export default function App() {
+export default function App({ loaderData }: Route.ComponentProps) {
+  const app = <Outlet />;
+
+  if (loaderData?.clerkEnabled) {
+    return (
+      <ClerkProvider loaderData={loaderData}>
+        <SessionProvider>{app}</SessionProvider>
+      </ClerkProvider>
+    );
+  }
+
   return (
     <SessionProvider>
-      <Outlet />
+      {app}
     </SessionProvider>
   );
 }

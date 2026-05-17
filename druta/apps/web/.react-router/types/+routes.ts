@@ -14,14 +14,27 @@ type Pages = {
   "/": {
     params: {};
   };
+  "/account/auth-check": {
+    params: {};
+  };
   "/account/logout": {
     params: {};
   };
   "/account/signin": {
     params: {};
   };
+  "/account/signin/*": {
+    params: {
+      "*": string;
+    };
+  };
   "/account/signup": {
     params: {};
+  };
+  "/account/signup/*": {
+    params: {
+      "*": string;
+    };
   };
   "/*": {
     params: {
@@ -33,11 +46,15 @@ type Pages = {
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/account/logout" | "/account/signin" | "/account/signup" | "/*";
+    page: "/" | "/account/auth-check" | "/account/logout" | "/account/signin" | "/account/signin/*" | "/account/signup" | "/account/signup/*" | "/*";
   };
   "./page.jsx": {
     id: "page";
     page: "/";
+  };
+  "./account/auth-check/page.jsx": {
+    id: "account/auth-check/page";
+    page: "/account/auth-check";
   };
   "./account/logout/page.jsx": {
     id: "account/logout/page";
@@ -47,9 +64,17 @@ type RouteFiles = {
     id: "account/signin/page";
     page: "/account/signin";
   };
+  "./account/signin/[...signIn]/page.jsx": {
+    id: "account/signin/[...signIn]/page";
+    page: "/account/signin/*";
+  };
   "./account/signup/page.jsx": {
     id: "account/signup/page";
     page: "/account/signup";
+  };
+  "./account/signup/[...signUp]/page.jsx": {
+    id: "account/signup/[...signUp]/page";
+    page: "/account/signup/*";
   };
   "./__create/not-found.tsx": {
     id: "__create/not-found";
@@ -60,8 +85,11 @@ type RouteFiles = {
 type RouteModules = {
   "root": typeof import("./src/app/root.tsx");
   "page": typeof import("./src/app/./page.jsx");
+  "account/auth-check/page": typeof import("./src/app/./account/auth-check/page.jsx");
   "account/logout/page": typeof import("./src/app/./account/logout/page.jsx");
   "account/signin/page": typeof import("./src/app/./account/signin/page.jsx");
+  "account/signin/[...signIn]/page": typeof import("./src/app/./account/signin/[...signIn]/page.jsx");
   "account/signup/page": typeof import("./src/app/./account/signup/page.jsx");
+  "account/signup/[...signUp]/page": typeof import("./src/app/./account/signup/[...signUp]/page.jsx");
   "__create/not-found": typeof import("./src/app/./__create/not-found.tsx");
 };

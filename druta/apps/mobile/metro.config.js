@@ -81,6 +81,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     if (SHARED_ALIASES[moduleName] && !moduleName.startsWith('./polyfills/')) {
       return context.resolveRequest(context, SHARED_ALIASES[moduleName], platform);
     }
+    if (moduleName.startsWith('@/')) {
+      return context.resolveRequest(context, path.resolve(__dirname, 'src', moduleName.slice(2)), platform);
+    }
     if (platform === 'web') {
       // Only apply aliases if the module is one of our polyfills
       if (WEB_ALIASES[moduleName] && !moduleName.startsWith('./polyfills/')) {

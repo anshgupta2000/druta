@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "Anything mobile app",
+    "scheme": "druta",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -10,7 +11,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "bundleIdentifier": "com.anshgupta.druta"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +23,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
-      "package": "xyz.create.CreateExpoEnvironment"
+      "package": "com.anshgupta.druta"
     },
     "plugins": [
       [
@@ -49,10 +51,14 @@
       ],
       [
         "expo-video",
-        { "supportsBackgroundPlayback": true, "supportsPictureInPicture": true }
+        {
+          "supportsBackgroundPlayback": true,
+          "supportsPictureInPicture": true
+        }
       ],
       "expo-font",
       "expo-secure-store",
+      "@clerk/expo",
       "expo-web-browser"
     ],
     "web": {
@@ -64,7 +70,11 @@
     },
     "extra": {
       "router": {
-        "origin": false
+        "origin": false,
+        "sitemap": false
+      },
+      "eas": {
+        "projectId": "3943bdf7-9bd1-47df-ba2b-d09d4f30187a"
       }
     }
   }
